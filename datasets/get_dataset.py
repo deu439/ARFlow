@@ -7,6 +7,7 @@ from transforms.ar_transforms.ap_transforms import get_ap_transforms
 from transforms import sep_transforms
 from datasets.flow_datasets import SintelRaw, Sintel
 from datasets.flow_datasets import KITTIRawFile, KITTIFlow, KITTIFlowMV
+from datasets.flow_datasets import Chairs
 
 
 def get_dataset(all_cfg):
@@ -52,6 +53,18 @@ def get_dataset(all_cfg):
                              target_transform={'flow': sep_transforms.ArrayToTensor()}
                              )
         valid_set = ConcatDataset([valid_set_1, valid_set_2])
+
+    elif cfg.type == 'Chairs':
+        ap_transform = get_ap_transforms(cfg.at_cfg) if cfg.run_at else None
+
+        train_set = Chairs(cfg.root_chairs,  n_frames=cfg.train_n_frames, split='training', with_flow=False,
+                           ap_transform=ap_transform, transform=input_transform, co_transform=co_transform)
+
+        valid_input_transform = copy.deepcopy(input_transform)
+        valid_input_transform.transforms.insert(0, sep_transforms.Zoom(*cfg.test_shape))
+
+        valid_set = Chairs(cfg.root_chairs, n_frames=cfg.val_n_frames, split='valid', with_flow=True,
+                           transform=valid_input_transform, target_transform={'flow': sep_transforms.ArrayToTensor()})
 
     elif cfg.type == 'Sintel_Raw':
         train_set = SintelRaw(cfg.root_sintel_raw, n_frames=cfg.train_n_frames,

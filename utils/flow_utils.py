@@ -47,6 +47,32 @@ def flow_to_image(flow, max_flow=256):
     return (im * 255).astype(np.uint8)
 
 
+def np_flow2rgb(flow_map, max_value=None):
+    _, h, w = flow_map.shape
+    # flow_map[:,(flow_map[0] == 0) & (flow_map[1] == 0)] = float('nan')
+    # print np.any(np.isnan(flow_map))
+    rgb_map = np.ones((h, w, 3)).astype(np.float32)
+    if max_value is not None:
+        normalized_flow_map = flow_map / max_value
+    else:
+        normalized_flow_map = flow_map / (np.abs(flow_map).max())
+    rgb_map[:, :, 0] += normalized_flow_map[0]
+    rgb_map[:, :, 1] -= 0.5 * (normalized_flow_map[0] + normalized_flow_map[1])
+    rgb_map[:, :, 2] += normalized_flow_map[1]
+    return rgb_map.clip(0, 1)
+
+
+def torch_flow2rgb(tensor):
+    batch_size, channels, height, width = tensor.size()
+    assert(channels == 2)
+    array = np.empty((batch_size, height, width, 3))
+    for i in range(batch_size):
+        flow = np.array(tensor[i, :, :, :])
+        array[i, :, :, :] = np_flow2rgb(flow)
+
+    return torch.Tensor(np.transpose(array, (0, 3, 1, 2)))
+
+
 def resize_flow(flow, new_shape):
     _, _, h, w = flow.shape
     new_h, new_w = new_shape
