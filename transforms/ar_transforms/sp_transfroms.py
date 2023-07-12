@@ -242,7 +242,7 @@ class RandomAffineFlow(nn.Module):
 
             theta_transform = torch.cat([b1, b2, b3, b4, b5, b6], dim=1)
             theta_try = apply_transform_to_params(theta0, theta_transform)
-            thetas = invalid.float() * theta_try + (1 - invalid).float() * thetas
+            thetas = invalid.float() * theta_try + (1.0 - invalid.float()) * thetas
 
             # compute new invalid ones
             invalid = self.find_invalid(width=width, height=height, thetas=thetas)
