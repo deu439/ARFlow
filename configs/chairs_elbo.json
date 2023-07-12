@@ -42,4 +42,4 @@
            "valid_size": 0,
            "weight_decay": 1e-06,
            "workers": 4},
- "trainer": "Chairs"}
+ "trainer": "ChairsElbo"}
