@@ -2,7 +2,7 @@ from . import sintel_trainer, sintel_trainer_ar
 from . import kitti_trainer, kitti_trainer_ar
 from . import chairs_trainer
 from . import chairs_elbo_trainer
-
+from . import sintel_elbo_trainer
 
 def get_trainer(name):
     if name == 'Sintel':
@@ -17,6 +17,8 @@ def get_trainer(name):
         TrainFramework = chairs_trainer.TrainFramework
     elif name == 'ChairsElbo':
         TrainFramework = chairs_elbo_trainer.TrainFramework
+    elif name == 'SintelElbo':
+        TrainFramework = sintel_elbo_trainer.TrainFramework
     else:
         raise NotImplementedError(name)
 
