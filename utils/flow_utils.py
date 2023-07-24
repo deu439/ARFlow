@@ -2,7 +2,8 @@ import torch
 import cv2
 import numpy as np
 from matplotlib.colors import hsv_to_rgb
-
+import scipy.special as ss
+import math
 
 def load_flow(path):
     if path.endswith('.png'):
@@ -147,3 +148,80 @@ def evaluate_flow(gt_flows, pred_flows, moving_masks=None):
         return res
     else:
         return [error / B]
+
+
+def sp_plot(error, entropy, n=25, alpha=100.0, eps=5e-2):
+    def sp_mask(thr, entropy):
+        mask = ss.expit(alpha * (thr[:, None, None] - entropy[None, :, :]))
+        frac = np.mean(1.0 - mask, axis=(1, 2))
+        return mask, frac
+
+    # Find the primary interval for soft thresholding
+    greatest = np.max(entropy) + eps    # Avoid zero-sized interval
+    least = np.min(entropy) - eps
+    _, frac = sp_mask(np.array([least]), entropy)
+    while abs(frac.item() - 1.0) > eps:
+        least -= 1e-3*(greatest - least)
+        _, frac = sp_mask(np.array([least]), entropy)
+
+    _, frac = sp_mask(np.array([greatest]), entropy)
+    while abs(frac.item() - 0.0) > eps:
+        greatest += 1e-3*(greatest - least)
+        _, frac = sp_mask(np.array([greatest]), entropy)
+
+    # Approximate uniform grid
+    grid_entr = np.linspace(greatest, least, n)
+    grid_frac = np.linspace(0, 1, n)
+    mask, frac = sp_mask(grid_entr, entropy)
+    for i in range(10):
+        #print("res: ", np.max(np.abs(frac - grid_frac)))
+        if np.max(np.abs(frac - grid_frac)) <= eps:
+            break
+        grid_entr = np.interp(grid_frac, frac, grid_entr)
+        mask, frac = sp_mask(grid_entr, entropy)
+
+    # Check whether the grid is approximately uniform
+    if np.max(np.abs(frac - grid_frac)) > eps:
+        raise RuntimeError("sp_plot did not converge!")
+
+    # Calculate the sparsification plot
+    epe = np.sum(error[None, :, :] * mask, axis=(1,2)) / np.sum(mask, axis=(1,2))
+
+    return frac, epe
+
+
+def evaluate_uncertainty(gt_flows, pred_flows, pred_logvars):
+    sauc, oauc = 0, 0
+    B = len(gt_flows)
+    for gt_flow, pred_flow, pred_logvar, i in zip(gt_flows, pred_flows, pred_logvars, range(B)):
+        H, W = gt_flow.shape[:2]
+
+        # Resample flow
+        h, w = pred_flow.shape[:2]
+        pred_flow = np.copy(pred_flow)
+        pred_flow[:, :, 0] = pred_flow[:, :, 0] / w * W
+        pred_flow[:, :, 1] = pred_flow[:, :, 1] / h * H
+        flo_pred = cv2.resize(pred_flow, (W, H), interpolation=cv2.INTER_LINEAR)
+
+        # Resample entropy
+        pred_logvar = np.copy(pred_logvar)
+        pred_logvar[:, :, 0] = pred_logvar[:, :, 0] - 2*math.log(w) + 2*math.log(W)
+        pred_logvar[:, :, 1] = pred_logvar[:, :, 1] - 2*math.log(h) + 2*math.log(H)
+        pred_logvar = cv2.resize(pred_logvar, (W, H), interpolation=cv2.INTER_LINEAR)
+
+        # Calculate sparsification plots
+        epe_map = np.sqrt(np.sum(np.square(flo_pred[:, :, :2] - gt_flow[:, :, :2]), axis=2))
+        entropy_map = np.sum(pred_logvar[:, :, :2], axis=2)
+        sfrac, splot = sp_plot(epe_map, entropy_map)
+        ofrac, oplot = sp_plot(epe_map, epe_map)     # Oracle
+
+        #import matplotlib.pyplot as plt
+        #plt.plot(sfrac, splot, '+-')
+        #plt.show()
+
+        # Cummulate AUC
+        sauc += np.trapz(splot / splot[0], x=sfrac)
+        oauc += np.trapz(oplot / oplot[0], x=ofrac)
+
+    return [sauc / B, (sauc - oauc) / B]
+

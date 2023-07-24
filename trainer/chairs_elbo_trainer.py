@@ -1,7 +1,7 @@
 import time
 import torch
 from .base_trainer import BaseTrainer
-from utils.flow_utils import evaluate_flow, torch_flow2rgb
+from utils.flow_utils import evaluate_flow, torch_flow2rgb, evaluate_uncertainty
 from utils.misc_utils import AverageMeter
 import matplotlib.pyplot as plt
 import numpy as np
@@ -97,7 +97,7 @@ class TrainFramework(BaseTrainer):
 
         n_step = 0
         for i_set, loader in enumerate(self.valid_loader):
-            error_names = ['EPE']
+            error_names = ['EPE', 'AUC', 'AUC_diff']
             error_meters = AverageMeter(i=len(error_names))
             for i_step, data in enumerate(loader):
                 img1, img2 = data['img1'], data['img2']
@@ -107,9 +107,11 @@ class TrainFramework(BaseTrainer):
                 # compute output
                 flows = self.model(img_pair)['flows_fw']
                 pred_flows = flows[0][:, 0:2].detach().cpu().numpy().transpose([0, 2, 3, 1])
+                pred_logvars = flows[0][:, 2:4].detach().cpu().numpy().transpose([0, 2, 3, 1])
 
                 es = evaluate_flow(gt_flows, pred_flows)
-                error_meters.update([l.item() for l in es], img_pair.size(0))
+                auc = evaluate_uncertainty(gt_flows, pred_flows, pred_logvars)
+                error_meters.update([l.item() for l in es + auc], img_pair.size(0))
 
                 # measure elapsed time
                 batch_time.update(time.time() - end)
