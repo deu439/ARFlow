@@ -90,18 +90,19 @@ if __name__ == '__main__':
 
     # Sparsification plot
     start = time.time()
-    fs, splot = sp_plot(epe, np_entropy_12, n=25, alpha=100.0, eps=5e-2)
+    splot = sp_plot(epe, np_entropy_12, n=25, alpha=100.0, eps=5e-2)
     end = time.time()
     print('Elapsed time: ', end - start)
-    fo, oplot = sp_plot(epe, epe, n=25, alpha=100.0, eps=5e-2)
+    oplot = sp_plot(epe, epe, n=25, alpha=100.0, eps=5e-2)
     # Cummulate AUC
-    sauc = np.trapz(splot / splot[0], x=fs)
-    oauc = np.trapz(oplot / oplot[0], x=fo)
+    frac = np.linspace(0, 1, 25)
+    sauc = np.trapz(splot / splot[0], x=frac)
+    oauc = np.trapz(oplot / oplot[0], x=frac)
 
     print('Auc:', sauc)
     print('Auc_oracle:', oauc)
-    plt.plot(fs, splot, '+-')
-    plt.plot(fo, oplot, '+-')
+    plt.plot(frac, splot, '+-')
+    plt.plot(frac, oplot, '+-')
     plt.show()
 
     #fig, ax = plt.subplots(2,2)
