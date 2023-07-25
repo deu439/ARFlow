@@ -1,4 +1,6 @@
 import collections
+import io
+import numpy as np
 
 
 def update_dict(orig_dict, new_dict):
@@ -49,3 +51,15 @@ class AverageMeter(object):
         avg = ' '.join(['{} {:.{}f}'.format(n, a, self.precision) for n, a in
                         zip(self.names, self.avg)])
         return '{} ({})'.format(val, avg)
+
+
+def matplot_fig_to_numpy(fig):
+    with io.BytesIO() as buff:
+        fig.savefig(buff, format='raw')
+        buff.seek(0)
+        data = np.frombuffer(buff.getvalue(), dtype=np.uint8)
+    w, h = fig.canvas.get_width_height()
+    im = data.reshape((int(h), int(w), -1))
+    return im
+
+

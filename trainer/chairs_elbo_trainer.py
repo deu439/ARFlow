@@ -2,7 +2,7 @@ import time
 import torch
 from .base_trainer import BaseTrainer
 from utils.flow_utils import evaluate_flow, torch_flow2rgb, evaluate_uncertainty
-from utils.misc_utils import AverageMeter
+from utils.misc_utils import AverageMeter, matplot_fig_to_numpy
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -17,7 +17,7 @@ class TrainFramework(BaseTrainer):
         am_batch_time = AverageMeter()
         am_data_time = AverageMeter()
 
-        key_meter_names = ['Loss', 'l_ph', 'l_sm', 'flow_mean']
+        key_meter_names = ['Loss', 'l_ph', 'l_sm', 'entropy', 'flow_mean']
         key_meters = AverageMeter(i=len(key_meter_names), precision=4)
 
         self.model.train()
@@ -42,10 +42,10 @@ class TrainFramework(BaseTrainer):
             flows_12, flows_21 = res_dict['flows_fw'], res_dict['flows_bw']
             flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
                      zip(flows_12, flows_21)]
-            loss, l_ph, l_sm, flow_mean = self.loss_func(flows, img_pair)
+            loss, l_ph, l_sm, entropy, flow_mean = self.loss_func(flows, img_pair)
 
             # update meters
-            key_meters.update([loss.item(), l_ph.item(), l_sm.item(), flow_mean.item()],
+            key_meters.update([loss.item(), l_ph.item(), l_sm.item(), entropy.item(), flow_mean.item()],
                               img_pair.size(0))
 
             # compute gradient and do optimization step
@@ -99,6 +99,9 @@ class TrainFramework(BaseTrainer):
         for i_set, loader in enumerate(self.valid_loader):
             error_names = ['EPE', 'AUC', 'AUC_diff']
             error_meters = AverageMeter(i=len(error_names))
+            splots = []
+            oplots = []
+
             for i_step, data in enumerate(loader):
                 img1, img2 = data['img1'], data['img2']
                 img_pair = torch.cat([img1, img2], 1).to(self.device)
@@ -110,8 +113,10 @@ class TrainFramework(BaseTrainer):
                 pred_logvars = flows[0][:, 2:4].detach().cpu().numpy().transpose([0, 2, 3, 1])
 
                 es = evaluate_flow(gt_flows, pred_flows)
-                auc = evaluate_uncertainty(gt_flows, pred_flows, pred_logvars)
+                auc, splot, oplot = evaluate_uncertainty(gt_flows, pred_flows, pred_logvars)
                 error_meters.update([l.item() for l in es + auc], img_pair.size(0))
+                splots += splot
+                oplots += oplot
 
                 # measure elapsed time
                 batch_time.update(time.time() - end)
@@ -131,16 +136,27 @@ class TrainFramework(BaseTrainer):
                 self.summary_writer.add_scalar(
                     'Valid_{}_{}'.format(name, i_set), value, self.i_epoch)
 
-            # write predicted and true flow to tf board
+            # write predicted and true flow to tboard
             gt_flow = data['target']['flow']
             image = torch_flow2rgb(gt_flow.cpu())
-            self.summary_writer.add_images(f"Valid/gt", image, self.i_epoch)
+            self.summary_writer.add_images("Valid/gt", image, self.i_epoch)
             image = torch_flow2rgb(flows[0][:, 0:2].cpu())
-            self.summary_writer.add_images(f"Valid/pred", image, self.i_epoch)
+            self.summary_writer.add_images("Valid/pred", image, self.i_epoch)
             entropy = torch.sum(flows[0][:, 2:4], axis=1, keepdim=True)
             entropy -= torch.min(entropy)
             entropy /= torch.max(entropy)
-            self.summary_writer.add_images(f"Valid/entropy", entropy.cpu(), self.i_epoch, dataformats='NCHW')
+            self.summary_writer.add_images("Valid/entropy", entropy.cpu(), self.i_epoch, dataformats='NCHW')
+
+            # write sparsification plots to tboard
+            x_axis = np.linspace(0, 1, 25)
+            y_axis1 = np.mean(splots, axis=0)
+            y_axis2 = np.mean(oplots, axis=0)
+            fig, ax = plt.subplots()
+            ax.plot(x_axis, y_axis1)
+            ax.plot(x_axis, y_axis2)
+            ax.legend(['splot', 'oracle'])
+            np_fig = matplot_fig_to_numpy(fig)
+            self.summary_writer.add_image(f"Valid/splot", np_fig, self.i_epoch, dataformats="HWC")
 
             all_error_avgs.extend(error_meters.avg)
             all_error_names.extend(['{}_{}'.format(name, i_set) for name in error_names])

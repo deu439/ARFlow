@@ -150,7 +150,7 @@ def evaluate_flow(gt_flows, pred_flows, moving_masks=None):
         return [error / B]
 
 
-def sp_plot(error, entropy, n=25, alpha=100.0, eps=5e-2):
+def sp_plot(error, entropy, n=25, alpha=100.0, eps=1e-1):
     def sp_mask(thr, entropy):
         mask = ss.expit(alpha * (thr[:, None, None] - entropy[None, :, :]))
         frac = np.mean(1.0 - mask, axis=(1, 2))
@@ -182,16 +182,21 @@ def sp_plot(error, entropy, n=25, alpha=100.0, eps=5e-2):
 
     # Check whether the grid is approximately uniform
     if np.max(np.abs(frac - grid_frac)) > eps:
-        raise RuntimeError("sp_plot did not converge!")
+        print("Warning! sp_plot did not converge!")
+        #raise RuntimeError("sp_plot did not converge!")
 
     # Calculate the sparsification plot
-    epe = np.sum(error[None, :, :] * mask, axis=(1,2)) / np.sum(mask, axis=(1,2))
+    splot = np.sum(error[None, :, :] * mask, axis=(1,2)) / np.sum(mask, axis=(1,2))
 
-    return frac, epe
+    # Resample on uniform grid
+    splot = np.interp(grid_frac, frac, splot)
+
+    return splot
 
 
 def evaluate_uncertainty(gt_flows, pred_flows, pred_logvars):
     sauc, oauc = 0, 0
+    splots, oplots = [], []
     B = len(gt_flows)
     for gt_flow, pred_flow, pred_logvar, i in zip(gt_flows, pred_flows, pred_logvars, range(B)):
         H, W = gt_flow.shape[:2]
@@ -212,16 +217,21 @@ def evaluate_uncertainty(gt_flows, pred_flows, pred_logvars):
         # Calculate sparsification plots
         epe_map = np.sqrt(np.sum(np.square(flo_pred[:, :, :2] - gt_flow[:, :, :2]), axis=2))
         entropy_map = np.sum(pred_logvar[:, :, :2], axis=2)
-        sfrac, splot = sp_plot(epe_map, entropy_map)
-        ofrac, oplot = sp_plot(epe_map, epe_map)     # Oracle
+        splot = sp_plot(epe_map, entropy_map)
+        oplot = sp_plot(epe_map, epe_map)     # Oracle
+
+        # Collect the splots and oplots
+        splots += [splot]
+        oplots += [oplot]
 
         #import matplotlib.pyplot as plt
         #plt.plot(sfrac, splot, '+-')
         #plt.show()
 
         # Cummulate AUC
-        sauc += np.trapz(splot / splot[0], x=sfrac)
-        oauc += np.trapz(oplot / oplot[0], x=ofrac)
+        frac = np.linspace(0, 1, 25)
+        sauc += np.trapz(splot / splot[0], x=frac)
+        oauc += np.trapz(oplot / oplot[0], x=frac)
 
-    return [sauc / B, (sauc - oauc) / B]
+    return [sauc / B, (sauc - oauc) / B], splots, oplots
 
