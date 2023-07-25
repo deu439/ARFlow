@@ -203,6 +203,9 @@ class PWCLiteProb(nn.Module):
             flow = flow + flow_fine
             log_var = log_var + log_var_fine
 
+            # clip the log variance
+            log_var = torch.clamp(log_var, max=10.0)
+
             flows.append(flow)
             log_vars.append(log_var)
 

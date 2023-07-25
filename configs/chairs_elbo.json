@@ -19,7 +19,7 @@
           "w_smooth": 50.0,
           "w_ssim": 0.85,
           "w_ternary": 0.0,
-          "w_entropy": 0.01,
+          "w_entropy": 0.1,
           "warp_pad": "border",
           "with_bk": true},
  "model": {"n_frames": 2,

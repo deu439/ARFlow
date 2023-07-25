@@ -44,20 +44,20 @@ class TrainFramework(BaseTrainer):
                      zip(flows_12, flows_21)]
             loss, l_ph, l_sm, entropy, flow_mean = self.loss_func(flows, img_pair)
 
+            # make sure loss does not contain NaNs
+            assert (not np.isnan(loss.item())), "training loss is NaN"
+
             # update meters
             key_meters.update([loss.item(), l_ph.item(), l_sm.item(), entropy.item(), flow_mean.item()],
                               img_pair.size(0))
 
             # compute gradient and do optimization step
             self.optimizer.zero_grad()
-            # loss.backward()
 
-            scaled_loss = 1024. * loss
-            scaled_loss.backward()
+            # backpropagation
+            loss.backward()
 
-            for param in [p for p in self.model.parameters() if p.requires_grad]:
-                param.grad.data.mul_(1. / 1024)
-
+            # update parameters
             self.optimizer.step()
 
             # measure elapsed time
