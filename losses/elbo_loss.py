@@ -65,6 +65,7 @@ class ElboLoss(nn.modules.Module):
 
         pyramid_smooth_losses = []
         pyramid_warp_losses = []
+        pyramid_entropy = []
         self.pyramid_occu_mask1 = []
         self.pyramid_occu_mask2 = []
 
@@ -113,24 +114,33 @@ class ElboLoss(nn.modules.Module):
 
             loss_smooth = self.loss_smooth(flow_sample_fw / s, im1_scaled)
 
+            entropy = torch.sum(flow[:, 2:4], dim=1).mean() / 2.0
+
             if self.cfg.with_bk:
                 loss_warp += self.loss_photomatric(im2_scaled, im2_recons,
                                                    occu_mask2)
                 loss_smooth += self.loss_smooth(flow_sample_bw / s, im2_scaled)
 
-                loss_warp /= 2.
-                loss_smooth /= 2.
+                entropy += torch.sum(flow[:, 6:8], dim=1).mean() / 2.0
+
+                loss_warp /= 2.0
+                loss_smooth /= 2.0
+                entropy /= 2.0      # why not
 
             pyramid_warp_losses.append(loss_warp)
             pyramid_smooth_losses.append(loss_smooth)
+            pyramid_entropy.append(entropy)
 
         pyramid_warp_losses = [l * w for l, w in
                                zip(pyramid_warp_losses, self.cfg.w_scales)]
         pyramid_smooth_losses = [l * w for l, w in
                                  zip(pyramid_smooth_losses, self.cfg.w_sm_scales)]
+        pyramid_entropy = [l * w for l, w in
+                                 zip(pyramid_entropy, self.cfg.w_en_scales)]
 
         warp_loss = sum(pyramid_warp_losses)
         smooth_loss = self.cfg.w_smooth * sum(pyramid_smooth_losses)
-        total_loss = warp_loss + smooth_loss
+        entropy = self.cfg.w_entropy * sum(pyramid_entropy)
+        total_loss = warp_loss + smooth_loss - entropy      # We seek maximum entropy solution
 
-        return total_loss, warp_loss, smooth_loss, pyramid_flows[0].abs().mean()
+        return total_loss, warp_loss, smooth_loss, entropy, pyramid_flows[0].abs().mean()
