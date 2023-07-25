@@ -108,5 +108,9 @@ def get_occu_mask_backward(flow21, th=0.2):
     base_grid = mesh_grid(B, H, W).type_as(flow21)  # B2HW
 
     corr_map = get_corresponding_map(base_grid + flow21)  # BHW
-    occu_mask = corr_map.clamp(min=0., max=1.) < th
+    if th > 0:
+        occu_mask = corr_map.clamp(min=0., max=1.) < th
+    else:
+        occu_mask = corr_map.clamp(min=0., max=1.).detach()
+
     return occu_mask.float()

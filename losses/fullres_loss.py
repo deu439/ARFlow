@@ -44,31 +44,26 @@ class FullResLoss(nn.modules.Module):
         :return:
         """
 
-        flow12 = output[0][:, 0:2]
-        flow21 = output[0][:, 2:4]
+        flow12_0 = output[0][:, 0:2]
+        flow21_0 = output[0][:, 2:4]
+        flow12_1 = output[1][:, 0:2]
+        flow21_1 = output[1][:, 2:4]
         im1 = target[:, :3]
         im2 = target[:, 3:]
 
-        # Resize flow to match the size of the images #
-        ###############################################
-        b, _, h, w = flow12.size()
-        _, _, H, W = im1.size()
-        flow12s = resize_flow(flow12, new_shape=(H, W))
-        flow21s = resize_flow(flow21, new_shape=(H, W))
-
         # warp the images #
         ###################
-        im1_recons = flow_warp(im2, flow12s, pad=self.cfg.warp_pad)
-        im2_recons = flow_warp(im1, flow21s, pad=self.cfg.warp_pad)
+        im1_recons = flow_warp(im2, flow12_0, pad=self.cfg.warp_pad)
+        im2_recons = flow_warp(im1, flow21_0, pad=self.cfg.warp_pad)
 
         # Calculate occlusion masks #
         #############################
         if self.cfg.occ_from_back:
-            occu_mask1 = 1 - get_occu_mask_backward(flow12s, th=0.2)
-            occu_mask2 = 1 - get_occu_mask_backward(flow21s, th=0.2)
+            occu_mask1 = 1. - get_occu_mask_backward(flow12_0, th=self.cfg.wang_thr)
+            occu_mask2 = 1. - get_occu_mask_backward(flow21_0, th=self.cfg.wang_thr)
         else:
-            occu_mask1 = 1 - get_occu_mask_bidirection(flow12s, flow21s)
-            occu_mask2 = 1 - get_occu_mask_bidirection(flow21s, flow12s)
+            occu_mask1 = 1. - get_occu_mask_bidirection(flow12_0, flow21_0)
+            occu_mask2 = 1. - get_occu_mask_bidirection(flow21_0, flow12_0)
 
         # Calculate photometric loss on the full-resolution images #
         ############################################################
@@ -78,11 +73,12 @@ class FullResLoss(nn.modules.Module):
 
         # Calculate smoothness loss at the scale of the last layer #
         ############################################################
+        _, _, h, w = flow12_1.size()
         im1s = F.interpolate(im1, (h, w), mode='area')
         im2s = F.interpolate(im2, (h, w), mode='area')
-        loss_smooth = self.loss_smooth(flow12, im1s)
+        loss_smooth = self.loss_smooth(flow12_1, im1s)
         if self.cfg.with_bk:
-            loss_smooth += self.loss_smooth(flow21, im2s)
+            loss_smooth += self.loss_smooth(flow21_1, im2s)
 
         # Calculate total loss #
         ########################
