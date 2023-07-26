@@ -117,3 +117,21 @@ def get_occu_mask_backward(flow21, th=0.2):
         occu_mask = 1. - corr_map.clamp(min=0., max=1.).detach()
 
     return occu_mask.float()
+
+
+def border_mask(flow):
+    """
+    Generates a mask that is True for pixels whose correspondence is inside the image borders.
+    flow: optical flow tensor (batch, 2, height, width)
+    returns: mask (batch, 1, height, width)
+    """
+    b, _, h, w = flow.size()
+    x = torch.arange(w).type_as(flow)
+    y = torch.arange(h).type_as(flow)
+    X, Y = torch.meshgrid(x, y, indexing='xy')
+    Xp = X.view(1, h, w).repeat(b, 1, 1) + flow[:, 0, :, :]
+    Yp = Y.view(1, h, w).repeat(b, 1, 1) + flow[:, 1, :, :]
+    mask_x = (Xp > 0.0) & (Xp < w-1.0)
+    mask_y = (Yp > 0.0) & (Yp < h-1.0)
+
+    return (mask_x & mask_y).view(b, 1, h, w).float()

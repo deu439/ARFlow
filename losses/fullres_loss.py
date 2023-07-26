@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .loss_blocks import SSIM, smooth_grad_1st, smooth_grad_2nd, TernaryLoss
 from utils.warp_utils import flow_warp
-from utils.warp_utils import get_occu_mask_bidirection, get_occu_mask_backward
+from utils.warp_utils import get_occu_mask_bidirection, get_occu_mask_backward, border_mask
 from utils.flow_utils import resize_flow
 
 
@@ -56,8 +56,11 @@ class FullResLoss(nn.modules.Module):
         im1_recons = flow_warp(im2, flow12_0, pad=self.cfg.warp_pad)
         im2_recons = flow_warp(im1, flow21_0, pad=self.cfg.warp_pad)
 
-        # Calculate occlusion masks #
-        #############################
+        # Calculate border and occlusion masks #
+        ########################################
+        border_mask1 = border_mask(flow12_0)
+        border_mask2 = border_mask(flow21_0)
+
         if self.cfg.occ_from_back:
             occu_mask1 = 1. - get_occu_mask_backward(flow12_0, th=self.cfg.wang_thr)
             occu_mask2 = 1. - get_occu_mask_backward(flow21_0, th=self.cfg.wang_thr)
@@ -67,9 +70,9 @@ class FullResLoss(nn.modules.Module):
 
         # Calculate photometric loss on the full-resolution images #
         ############################################################
-        loss_warp = self.loss_photomatric(im1, im1_recons, occu_mask1)
+        loss_warp = self.loss_photomatric(im1, im1_recons, occu_mask1 * border_mask1)
         if self.cfg.with_bk:
-            loss_warp += self.loss_photomatric(im2, im2_recons, occu_mask2)
+            loss_warp += self.loss_photomatric(im2, im2_recons, occu_mask2 * border_mask2)
 
         # Calculate smoothness loss at the scale of the last layer #
         ############################################################
