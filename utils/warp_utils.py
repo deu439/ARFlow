@@ -104,6 +104,9 @@ def get_occu_mask_bidirection(flow12, flow21, scale=0.01, bias=0.5):
 
 
 def get_occu_mask_backward(flow21, th=0.2):
+    """
+    The function returns a mask which is 1 (or close to 1) at occluded pixels!
+    """
     B, _, H, W = flow21.size()
     base_grid = mesh_grid(B, H, W).type_as(flow21)  # B2HW
 
@@ -111,6 +114,6 @@ def get_occu_mask_backward(flow21, th=0.2):
     if th > 0:
         occu_mask = corr_map.clamp(min=0., max=1.) < th
     else:
-        occu_mask = corr_map.clamp(min=0., max=1.).detach()
+        occu_mask = 1. - corr_map.clamp(min=0., max=1.).detach()
 
     return occu_mask.float()
