@@ -135,3 +135,108 @@ def border_mask(flow):
     mask_y = (Yp > 0.0) & (Yp < h-1.0)
 
     return (mask_x & mask_y).view(b, 1, h, w).float()
+
+
+# Credit: https://github.com/google-research/google-research/blob/master/uflow/uflow_utils.py#L113
+def flow_to_warp(flow):
+    # Convert to uflow axes and channels order
+    flow = flow.permute(0,2,3,1)
+    flow = flow.flip(-1)
+
+    # Construct a grid of the image coordinates.
+    _, height, width, _ = flow.size()
+    i_grid, j_grid = torch.meshgrid(
+        torch.linspace(0.0, height - 1.0, int(height)),
+        torch.linspace(0.0, width - 1.0, int(width)),
+        indexing='ij')
+    grid = torch.stack([i_grid, j_grid], axis=2)
+
+    # Add the flow field to the image grid.
+    grid = grid.type_as(flow)
+    warp = grid + flow
+    return warp
+
+
+# Credit: https://github.com/google-research/google-research/blob/master/uflow/uflow_utils.py#L113
+def compute_range_map(flow):
+    """Count how often each coordinate is sampled.
+
+    Counts are assigned to the integer coordinates around the sampled coordinates
+    using weights from bilinear interpolation.
+
+    Args:
+      flow: A float tensor of shape (batch size x height x width x 2) that
+        represents a dense flow field.
+
+    Returns:
+      A float tensor of shape [batch_size, height, width, 1] that denotes how
+      often each pixel is sampled.
+    """
+
+    # Get input shape.
+    assert flow.dim() == 4
+    batch_size, _, input_height, input_width = flow.size()
+
+    flow_height = input_height
+    flow_width = input_width
+
+    # Move the coordinate frame appropriately
+    output_height = input_height
+    output_width = input_width
+    coords = flow_to_warp(flow)
+
+    # Split coordinates into an integer part and a float offset for interpolation.
+    coords_floor = torch.floor(coords)
+    coords_offset = coords - coords_floor
+    coords_floor = coords_floor.long()
+
+    # Define a batch offset for flattened indexes into all pixels.
+    batch_range = torch.reshape(torch.arange(batch_size), (batch_size, 1, 1)).type_as(coords_floor)
+    idx_batch_offset = torch.tile(batch_range, [1, flow_height, flow_width]) * output_height * output_width
+
+    # Flatten everything.
+    coords_floor_flattened = torch.reshape(coords_floor, [-1, 2])
+    coords_offset_flattened = torch.reshape(coords_offset, [-1, 2])
+    idx_batch_offset_flattened = torch.reshape(idx_batch_offset, [-1])
+
+    # Initialize results.
+    idxs_list = []
+    weights_list = []
+
+    # Loop over differences di and dj to the four neighboring pixels.
+    for di in range(2):
+        for dj in range(2):
+
+            # Compute the neighboring pixel coordinates.
+            idxs_i = coords_floor_flattened[:, 0] + di
+            idxs_j = coords_floor_flattened[:, 1] + dj
+            # Compute the flat index into all pixels.
+            idxs = idx_batch_offset_flattened + idxs_i * output_width + idxs_j
+
+            # Only count valid pixels.
+            mask = (idxs_i >= 0) & (idxs_i < output_height) & (idxs_j >= 0) & (idxs_j < output_width)
+            mask = torch.stack(torch.where(mask)).T
+            mask = torch.reshape(mask, [-1])
+            valid_idxs = idxs[mask]     # FIXME
+            valid_offsets = coords_offset_flattened[mask]   # FIXME
+
+            # Compute weights according to bilinear interpolation.
+            weights_i = (1. - di) - (-1)**di * valid_offsets[:, 0]
+            weights_j = (1. - dj) - (-1)**dj * valid_offsets[:, 1]
+            weights = weights_i * weights_j
+
+            # Append indices and weights to the corresponding list.
+            idxs_list.append(valid_idxs)
+            weights_list.append(weights)
+
+    # Concatenate everything.
+    idxs = torch.concat(idxs_list, axis=0)
+    weights = torch.concat(weights_list, axis=0)
+
+    # Sum up weights for each pixel and reshape the result.
+    num_segments = batch_size * output_height * output_width
+    counts = torch.zeros(num_segments, dtype=weights.dtype, device=weights.device)
+    counts.scatter_add_(0, idxs, weights)   # FIXME
+    count_image = torch.reshape(counts, [batch_size, 1, output_height, output_width])
+
+    return count_image
