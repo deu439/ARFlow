@@ -2,6 +2,7 @@ from .flow_loss import unFlowLoss
 from .elbo_loss import ElboLoss
 from .fullres_loss import FullResLoss
 from .uflow_loss import UFlowLoss
+from .uflow_elbo_loss import UFlowElboLoss
 
 def get_loss(cfg):
     if cfg.type == 'unflow':
@@ -12,6 +13,8 @@ def get_loss(cfg):
         loss = FullResLoss(cfg)
     elif cfg.type == 'uflow':
         loss = UFlowLoss(cfg)
+    elif cfg.type == 'uflow_elbo':
+        loss = UFlowElboLoss(cfg)
     else:
         raise NotImplementedError(cfg.type)
     return loss

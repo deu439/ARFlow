@@ -2,6 +2,7 @@ from .pwclite import PWCLite
 from .pwclite_prob import PWCLiteProb
 from .pwclite_uflow import PWCLiteUflow
 from .uflow_model import PWCFlow
+from .uflow_prob_model import PWCProbFlow
 
 
 def get_model(cfg):
@@ -13,6 +14,8 @@ def get_model(cfg):
         model = PWCLiteUflow(cfg)
     elif cfg.type == 'uflow':
         model = PWCFlow(cfg)
+    elif cfg.type =='uflow_prob':
+        model = PWCProbFlow(cfg)
     else:
         raise NotImplementedError(cfg.type)
     return model
