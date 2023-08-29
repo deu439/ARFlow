@@ -50,29 +50,29 @@ def mask_invalid(coords):
     return (mask_x & mask_y).unsqueeze(1).float()
 
 
-#def resample(source, coords):
-#    """Resample the source image at the passed coordinates.
-#
-#    Args:
-#      source: tf.tensor, batch of images to be resampled.
-#      coords: [B, 2, H, W] tf.tensor, batch of coordinates in the image.
-#
-#    Returns:
-#      The resampled image.
-#
-#    Coordinates should be between 0 and size-1. Coordinates outside of this range
-#    are handled by interpolating with a background image filled with zeros in the
-#    same way that SAME size convolution works.
-#    """
-#
-#    _, _, H, W = source.shape
-#    # normalize coordinates to [-1 .. 1] range
-#    coords = coords.clone()
-#    coords[:, 0, :, :] = 2.0 * coords[:, 0, :, :].clone() / max(W - 1, 1) - 1.0
-#    coords[:, 1, :, :] = 2.0 * coords[:, 1, :, :].clone() / max(H - 1, 1) - 1.0
-#    coords = coords.permute(0, 2, 3, 1)
-#    output = torch.nn.functional.grid_sample(source, coords, align_corners=False)
-#    return output
+def resample2(source, coords):
+    """Resample the source image at the passed coordinates.
+
+    Args:
+      source: tf.tensor, batch of images to be resampled.
+      coords: [B, 2, H, W] tf.tensor, batch of coordinates in the image.
+
+    Returns:
+      The resampled image.
+
+    Coordinates should be between 0 and size-1. Coordinates outside of this range
+    are handled by interpolating with a background image filled with zeros in the
+    same way that SAME size convolution works.
+    """
+
+    _, _, H, W = source.shape
+    # normalize coordinates to [-1 .. 1] range
+    coords = coords.clone()
+    coords[:, 0, :, :] = 2.0 * coords[:, 0, :, :].clone() / max(W - 1, 1) - 1.0
+    coords[:, 1, :, :] = 2.0 * coords[:, 1, :, :].clone() / max(H - 1, 1) - 1.0
+    coords = coords.permute(0, 2, 3, 1)
+    output = torch.nn.functional.grid_sample(source, coords, align_corners=True, mode='bilinear', padding_mode='zeros')
+    return output
 
 
 def resample(source, coords):
@@ -190,7 +190,7 @@ def compute_range_map(flow):
     return count_image
 
 
-def upsample(img, is_flow, scale_factor=2.0):
+def upsample(img, is_flow, scale_factor=2.0, align_corners=False):
     """Double resolution of an image or flow field.
 
     Args:
@@ -202,7 +202,7 @@ def upsample(img, is_flow, scale_factor=2.0):
     """
 
     img_resized = nn.functional.interpolate(img, scale_factor=scale_factor, mode='bilinear',
-                                            align_corners=False)
+                                            align_corners=align_corners)
 
     if is_flow:
         # Scale flow values to be consistent with the new image size.

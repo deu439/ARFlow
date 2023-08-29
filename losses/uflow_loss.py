@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from utils.uflow_utils import flow_to_warp, resample, mask_invalid, census_loss, image_grads, robust_l1
+from utils.uflow_utils import flow_to_warp, resample, resample2, mask_invalid, census_loss, image_grads, robust_l1
 from utils.warp_utils import compute_range_map
 
 
@@ -28,10 +28,10 @@ class UFlowLoss(nn.modules.Module):
         # Warp the images #
         ###################
         warp12_0 = flow_to_warp(flow12_0)
-        im1_recons = resample(im2_0.detach(), warp12_0)
+        im1_recons = resample2(im2_0.detach(), warp12_0)
         if self.cfg.with_bk:
             warp21_0 = flow_to_warp(flow21_0)
-            im2_recons = resample(im1_0.detach(), warp21_0)
+            im2_recons = resample2(im1_0.detach(), warp21_0)
 
         # Calculate border and occlusion masks #
         ########################################
@@ -52,10 +52,10 @@ class UFlowLoss(nn.modules.Module):
         # Calculate smoothness loss on level 2 #
         ############################################################
         _, _, height, width = im1_0.size()
-        im1_1 = F.interpolate(im1_0, scale_factor=0.5, mode='bilinear', align_corners=False)
-        im1_2 = F.interpolate(im1_1, scale_factor=0.5, mode='bilinear', align_corners=False)
-        im2_1 = F.interpolate(im2_0, scale_factor=0.5, mode='bilinear', align_corners=False)
-        im2_2 = F.interpolate(im2_1, scale_factor=0.5, mode='bilinear', align_corners=False)
+        im1_1 = F.interpolate(im1_0, scale_factor=0.5, mode='bilinear', align_corners=self.cfg.align_corners)
+        im1_2 = F.interpolate(im1_1, scale_factor=0.5, mode='bilinear', align_corners=self.cfg.align_corners)
+        im2_1 = F.interpolate(im2_0, scale_factor=0.5, mode='bilinear', align_corners=self.cfg.align_corners)
+        im2_2 = F.interpolate(im2_1, scale_factor=0.5, mode='bilinear', align_corners=self.cfg.align_corners)
 
         # Forward -----------
         im1_gx, im1_gy = image_grads(im1_2.detach())

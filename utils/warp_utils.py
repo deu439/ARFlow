@@ -80,16 +80,13 @@ def get_corresponding_map(data):
     return corresponding_map.unsqueeze(1)
 
 
-def flow_warp(x, flow, pad='border', mode='bilinear'):
+def flow_warp(x, flow, pad='zeros', mode='bilinear', align_corners=True):
     B, _, H, W = flow.size()
     base_grid = mesh_grid(B, H, W).type_as(flow)  # B2HW
     warp = base_grid + flow
     v_grid = norm_grid(warp)  # BHW2
 
-    if 'align_corners' in inspect.getfullargspec(torch.nn.functional.grid_sample).args:
-        im1_recons = nn.functional.grid_sample(x, v_grid, mode=mode, padding_mode=pad, align_corners=True)
-    else:
-        im1_recons = nn.functional.grid_sample(x, v_grid, mode=mode, padding_mode=pad)
+    im1_recons = nn.functional.grid_sample(x, v_grid, mode=mode, padding_mode=pad, align_corners=align_corners)
     return im1_recons
 
 
