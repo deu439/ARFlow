@@ -2,7 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utils.uflow_utils import flow_to_warp, resample, resample2, compute_range_map, mask_invalid, census_loss, image_grads, robust_l1, upsample
+from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_invalid, census_loss, image_grads, robust_l1, upsample
+from utils.triag_solve import BackwardSubst
+
 
 class UFlowElboLoss(nn.modules.Module):
     def __init__(self, cfg):
@@ -13,7 +15,7 @@ class UFlowElboLoss(nn.modules.Module):
         self.Normal.loc = self.Normal.loc.cuda() # hack to get sampling on the GPU
         self.Normal.scale = self.Normal.scale.cuda()
 
-    def reparam(self, mean, log_var, nsamples=1):
+    def reparam_diag(self, mean, log_var, nsamples=1):
         """
         Generates normal distributed samples with a given mean and variance.
         mean: mean - tensor of size (batch, 2, height, width)
@@ -25,6 +27,15 @@ class UFlowElboLoss(nn.modules.Module):
         z = mean + torch.exp(log_var / 2.0) * self.Normal.sample(mean.size())
         return z
 
+    def reparam_triag(self, mean, log_eig, left, over, nsamples=1):
+        mean = mean.repeat(nsamples, 1, 1, 1)
+        log_eig = log_eig.repeat(nsamples, 1, 1, 1)
+        left = left.repeat(nsamples, 1, 1, 1)
+        over = over.repeat(nsamples, 1, 1, 1)
+        eps = self.Normal.sample(mean.size())
+        z = mean + BackwardSubst.apply(torch.exp(log_eig), left, over, eps)
+        return z
+
     def forward(self, output, target):
         """
 
@@ -34,21 +45,42 @@ class UFlowElboLoss(nn.modules.Module):
         """
 
         # Get level 2 outputs - before upsampling
-        mean12_2 = output[2][:, 0:2]
-        log_var12_2 = output[2][:, 2:4]
-        mean21_2 = output[2][:, 4:6]
-        log_var21_2 = output[2][:, 6:8]
+        if self.cfg.diag:
+            mean12_2 = output[2][:, 0:2]
+            log_var12_2 = output[2][:, 2:4]
+            mean21_2 = output[2][:, 4:6]
+            log_var21_2 = output[2][:, 6:8]
+        else:
+            mean12_2 = output[2][:, 0:2]
+            log_diag12_2 = output[2][:, 2:4]
+            left12_2 = output[2][:, 4:6, :, :-1]
+            over12_2 = output[2][:, 6:8, :-1, :]
+
+            mean21_2 = output[2][:, 8:10]
+            log_diag21_2 = output[2][:, 10:12]
+            left21_2 = output[2][:, 12:14, :, :-1]
+            over21_2 = output[2][:, 14:16, :-1, :]
+
         im1_0 = target[:, :3]
         im2_0 = target[:, 3:]
 
         # Calculate entropy loss
-        loss_entropy = self.cfg.w_entropy * torch.sum(log_var12_2, dim=1).mean() / 2.0
-        if self.cfg.with_bk:
-            loss_entropy += self.cfg.w_entropy * torch.sum(log_var21_2, dim=1).mean() / 2.0
+        if self.cfg.diag:
+            loss_entropy = self.cfg.w_entropy * torch.sum(log_var12_2, dim=1).mean() / 2.0
+            if self.cfg.with_bk:
+                loss_entropy += self.cfg.w_entropy * torch.sum(log_var21_2, dim=1).mean() / 2.0
+        else:
+            loss_entropy = -self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
+            if self.cfg.with_bk:
+                loss_entropy -= self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
 
         # Reparametrization trick
-        flow12_2 = self.reparam(mean12_2, log_var12_2)
-        flow21_2 = self.reparam(mean21_2, log_var21_2)
+        if self.cfg.diag:
+            flow12_2 = self.reparam_diag(mean12_2, log_var12_2)
+            flow21_2 = self.reparam_diag(mean21_2, log_var21_2)
+        else:
+            flow12_2 = self.reparam_triag(mean12_2, log_diag12_2, left12_2, over12_2)
+            flow21_2 = self.reparam_triag(mean21_2, log_diag21_2, left21_2, over21_2)
 
         # Upsample flow 4x
         flow12_1 = upsample(flow12_2, is_flow=True, align_corners=self.cfg.align_corners)

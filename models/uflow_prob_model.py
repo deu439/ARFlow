@@ -93,7 +93,6 @@ def compute_cost_volume(features1, features2, max_displacement):
     return cost_volume
 
 
-
 class PWCProbFlow(nn.Module):
     def __init__(self, cfg):
         super(PWCProbFlow, self).__init__()
@@ -109,9 +108,10 @@ class PWCProbFlow(nn.Module):
         self._accumulate_flow = True
         self._shared_flow_decoder = False
         self._align_corners = cfg.align_corners
+        self._out_channels = cfg.out_channels
 
-        self._refine_model = self._build_refinement_model(out_channels=4)
-        self._flow_layers = self._build_flow_layers(out_channels=4)
+        self._refine_model = self._build_refinement_model()
+        self._flow_layers = self._build_flow_layers()
         if not self._use_cost_volume:
             self._cost_volume_surrogate_convs = self._build_cost_volume_surrogate_convs()
         if self._num_context_up_channels:
@@ -137,14 +137,27 @@ class PWCProbFlow(nn.Module):
                 if layer.bias is not None:
                     nn.init.constant_(layer.bias, 0)
 
+    def upsample_out(self, out):
+        if self._out_channels > 2:
+            flow, rest = torch.split(out, [2, self._out_channels - 2], dim=1)
+            flow_up = uflow_utils.upsample(flow, is_flow=True, align_corners=self._align_corners)
+            # log_var_up = uflow_utils.upsample(log_var + 2*math.log(2), is_flow=False, align_corners=self._align_corners)
+            rest_up = uflow_utils.upsample(rest, is_flow=False, align_corners=self._align_corners)
+            out_up = torch.cat([flow_up, rest_up], dim=1)
+        else:
+            flow = out
+            flow_up = uflow_utils.upsample(flow, is_flow=True, align_corners=self._align_corners)
+            out_up = flow_up
+
+        return flow_up, out_up
+
     def forward_2_frames(self, feature_pyramid1, feature_pyramid2):
         """Run the model."""
         context = None
-        flow = None
         flow_up = None
         context_up = None
-        flows = []
-        log_vars = []
+        out_up = None
+        outs = []
 
         # Go top down through the levels to the second to last one to estimate flow.
         for level, (features1, features2) in reversed(
@@ -188,13 +201,18 @@ class PWCProbFlow(nn.Module):
                 features1 = conv_1x1(features1)
 
             # Compute context and flow from previous flow, cost volume, and features1.
-            if flow_up is None:
-                x_in = torch.cat([cost_volume, features1], dim=1)
-            else:
-                if context_up is None:
-                    x_in = torch.cat([flow_up, log_var_up, cost_volume, features1], dim=1)
-                else:
-                    x_in = torch.cat([context_up, flow_up, log_var_up, cost_volume, features1], dim=1)
+            x_in = torch.cat([cost_volume, features1], dim=1)
+            if out_up is not None:
+                x_in = torch.cat([out_up, x_in], dim=1)
+            if context_up is not None:
+                x_in = torch.cat([context_up, x_in], dim=1)
+            #if flow_up is None:
+            #    x_in = torch.cat([cost_volume, features1], dim=1)
+            #else:
+            #    if context_up is None:
+            #        x_in = torch.cat([out_up, cost_volume, features1], dim=1)
+            #    else:
+            #        x_in = torch.cat([context_up, out_up, cost_volume, features1], dim=1)
 
             # Use dense-net connections.
             x_out = None
@@ -207,64 +225,53 @@ class PWCProbFlow(nn.Module):
                 x_out = layer(x_in)
                 x_in = torch.cat([x_in, x_out], dim=1)
             context = x_out
-
             out = flow_layers[-1](context)
-            flow, log_var = torch.split(out, 2, dim=1)
 
             # Level dropout
             if self.training and self._drop_out_rate > 0:
                 maybe_dropout = (torch.rand(1) > self._drop_out_rate).float().item()
                 context = context * maybe_dropout
-                flow = flow * maybe_dropout
-                log_var = log_var * maybe_dropout
+                out = out * maybe_dropout
 
-            if flow_up is not None and self._accumulate_flow:
-                flow += flow_up
-                log_var += log_var_up
+            if out_up is not None and self._accumulate_flow:
+                out = out + out_up
 
-            # Upsample flow for the next lower level.
-            flow_up = uflow_utils.upsample(flow, is_flow=True, align_corners=self._align_corners)
-            log_var_up = uflow_utils.upsample(log_var + 2*math.log(2), is_flow=False, align_corners=self._align_corners)
+            # Upsample for the next lower level - treat the flow channels separately!
+            flow_up, out_up = self.upsample_out(out)
+
             if self._num_context_up_channels:
                 context_up = self._context_up_layers[level](context)
 
             # Append results to list.
-            flows.insert(0, flow)
-            log_vars.insert(0, log_var)
+            outs.insert(0, out)
 
-        # Refine flow at level 1.
+        # Refine flow at level 2
         # refinement = self._refine_model(torch.cat([context, flow], dim=1))
-        refinement = torch.cat([context, flow, log_var], dim=1)
+        refinement = torch.cat([context, out], dim=1)
         for layer in self._refine_model:
             refinement = layer(refinement)
-
-        flow_refinement, log_var_refinement = torch.split(refinement, 2, dim=1)
 
         # Level dropout
         if self.training and self._drop_out_rate > 0:
             maybe_dropout = (torch.rand(1) > self._drop_out_rate).float().item()
             # note that operation must not be inplace, otherwise autograd will fail pathetically
-            flow_refinement = flow_refinement * maybe_dropout
-            log_var_refinement = log_var_refinement * maybe_dropout
+            refinement = refinement * maybe_dropout
 
-        refined_flow = flow + flow_refinement
-        flows[0] = refined_flow
-        refined_log_var = log_var + log_var_refinement
-        log_vars[0] = refined_log_var
+        refined_out = out + refinement
+        flow, log_diag, rest = torch.split(refined_out, [2, 2, self._out_channels - 4], dim=1)
+        outs[0] = torch.cat([flow, torch.clamp(log_diag, max=10.0), torch.clamp(rest, min=-1e4, max=1e4)], dim=1)
 
-        # clip the log variance
-        log_vars[0] = torch.clamp(log_vars[0], max=10.0)
+        # clip channels 2, 3 to max 10
+        #if self._out_channels >= 4:
+        #    outs[0][:, 2:4] = torch.clamp(outs[0][:, 2:4], max=10.0)
 
-        # Upsample flow 4x
-        flows.insert(0, uflow_utils.upsample(flows[0], is_flow=True, align_corners=self._align_corners))
-        flows.insert(0, uflow_utils.upsample(flows[0], is_flow=True, align_corners=self._align_corners))
-        # Upsample log_var 4x
-        log_vars.insert(0, uflow_utils.upsample(log_vars[0] + 2*math.log(2), is_flow=False, align_corners=self._align_corners))
-        log_vars.insert(0, uflow_utils.upsample(log_vars[0] + 2*math.log(2), is_flow=False, align_corners=self._align_corners))
+        # Upsample 4x up to the 0-th level
+        _, out_1 = self.upsample_out(outs[0])
+        _, out_0 = self.upsample_out(out_1)
+        outs.insert(0, out_1)
+        outs.insert(0, out_0)
 
-        # Concatenate outputs
-        output = [torch.cat([flow, log_var], 1) for flow, log_var in zip(flows, log_vars)]
-        return output
+        return outs
 
     def forward(self, x, with_bk=True):
         n_frames = x.size(1) / 3
@@ -307,7 +314,7 @@ class PWCProbFlow(nn.Module):
                     padding=1))
         return nn.ModuleList(layers)
 
-    def _build_flow_layers(self, out_channels=4):
+    def _build_flow_layers(self):
         """Build layers for flow estimation."""
         # Empty list of layers level 0 because flow is only estimated at levels > 0.
         result = nn.ModuleList([None])
@@ -318,7 +325,7 @@ class PWCProbFlow(nn.Module):
             layers = nn.ModuleList()
             last_in_channels = (64+32) if not self._use_cost_volume else (81+32)
             if i != self._num_levels-1:
-                last_in_channels += out_channels + self._num_context_up_channels
+                last_in_channels += self._out_channels + self._num_context_up_channels
 
             for c in block_layers:
                 layers.append(
@@ -336,7 +343,7 @@ class PWCProbFlow(nn.Module):
             layers.append(
                 nn.Conv2d(
                     in_channels=block_layers[-1],
-                    out_channels=out_channels,
+                    out_channels=self._out_channels,
                     kernel_size=(3, 3),
                     padding='same'))
             if self._shared_flow_decoder:
@@ -344,10 +351,10 @@ class PWCProbFlow(nn.Module):
             result.append(layers)
         return result
 
-    def _build_refinement_model(self, out_channels=4):
+    def _build_refinement_model(self):
         """Build model for flow refinement using dilated convolutions."""
         layers = []
-        last_in_channels = 32+out_channels
+        last_in_channels = 32+self._out_channels
         for c, d in [(128, 1), (128, 2), (128, 4), (96, 8), (64, 16), (32, 1)]:
             layers.append(
                 nn.Conv2d(
@@ -363,7 +370,7 @@ class PWCProbFlow(nn.Module):
         layers.append(
             nn.Conv2d(
                 in_channels=last_in_channels,
-                out_channels=out_channels,
+                out_channels=self._out_channels,
                 kernel_size=(3, 3),
                 stride=1,
                 padding='same'))
