@@ -16,8 +16,8 @@ __global__ void forward_substitution_kernel(
 
     // Get the index of thread
     int index = blockIdx.x * blockDim.x + threadIdx.x;
-    int i = index / A.size(0);  // batch
-    int j = index % A.size(0);  // channel
+    int i = index / A.size(1);  // batch
+    int j = index % A.size(1);  // channel
 
     if (i < A.size(0) && j < A.size(1)) {
         for (int k = 0; k < M; k++) {        // y axis
@@ -45,8 +45,8 @@ __global__ void backward_substitution_kernel(
 
     // Get the index of thread
     int index = blockIdx.x * blockDim.x + threadIdx.x;
-    int i = index / A.size(0);  // batch
-    int j = index % A.size(0);  // channel
+    int i = index / A.size(1);  // batch
+    int j = index % A.size(1);  // channel
 
     if (i < A.size(0) && j < A.size(1)) {
         for (int k = M-1; k >= 0; k--) {        // y axis
