@@ -24,6 +24,7 @@ class BaseTrainer:
 
         self.model = self._init_model(model)
         self.optimizer = self._create_optimizer()
+        self.lr_scheduler = self._create_lr_scheduler()
         self.loss_func = loss_func
 
         self.best_error = np.inf
@@ -47,6 +48,11 @@ class BaseTrainer:
                 valid_res = ' '.join(
                     '{}: {:.2f}'.format(*t) for t in zip(error_names, errors))
                 self._log.info(' * Epoch {} '.format(self.i_epoch) + valid_res)
+
+            # Start learning rate decay after defined number of epochs
+            if self.i_epoch >= self.cfg.lr_decay_start_epoch:
+                self.lr_scheduler.step()
+                self._log.info(' * lr: {}'.format(self.lr_scheduler.get_last_lr()))
 
     def _init_model(self, model):
         model = model.to(self.device)
@@ -87,6 +93,9 @@ class BaseTrainer:
         else:
             raise NotImplementedError(self.cfg.optim)
         return optimizer
+
+    def _create_lr_scheduler(self):
+        return torch.optim.lr_scheduler.ExponentialLR(self.optimizer, self.cfg.lr_decay_factor)
 
     def _prepare_device(self, n_gpu_use):
         """
