@@ -27,13 +27,13 @@ class UFlowElboLoss(nn.modules.Module):
         z = mean + torch.exp(log_var / 2.0) * self.Normal.sample(mean.size())
         return z
 
-    def reparam_triag(self, mean, log_eig, left, over, nsamples=1):
+    def reparam_triag(self, mean, diag, left, over, nsamples=1):
         mean = mean.repeat(nsamples, 1, 1, 1)
-        log_eig = log_eig.repeat(nsamples, 1, 1, 1)
+        diag = diag.repeat(nsamples, 1, 1, 1)
         left = left.repeat(nsamples, 1, 1, 1)
         over = over.repeat(nsamples, 1, 1, 1)
         eps = self.Normal.sample(mean.size())
-        z = mean + BackwardSubst.apply(torch.exp(log_eig), left, over, eps)
+        z = mean + BackwardSubst.apply(diag, left, over, eps)
         return z
 
     def forward(self, output, target):
@@ -61,6 +61,18 @@ class UFlowElboLoss(nn.modules.Module):
             left21_2 = output[2][:, 12:14, :, :-1]
             over21_2 = output[2][:, 14:16, :-1, :]
 
+            # Ensure that the matrices are diagonally dominant
+            diag12_2 = torch.exp(log_diag12_2)
+            diag21_2 = torch.exp(log_diag21_2)
+            if self.cfg.diag_dominant:
+                diag12_2 = diag12_2 \
+                           + torch.nn.functional.pad(torch.abs(left12_2), (1, 0)) \
+                           + torch.nn.functional.pad(torch.abs(over12_2), (0, 0, 1, 0))
+
+                diag21_2 = diag21_2 \
+                           + torch.nn.functional.pad(torch.abs(left21_2), (1, 0)) \
+                           + torch.nn.functional.pad(torch.abs(over21_2), (0, 0, 1, 0))
+
         im1_0 = target[:, :3]
         im2_0 = target[:, 3:]
 
@@ -68,19 +80,25 @@ class UFlowElboLoss(nn.modules.Module):
         if self.cfg.diag:
             loss_entropy = self.cfg.w_entropy * torch.sum(log_var12_2, dim=1).mean() / 2.0
             if self.cfg.with_bk:
-                loss_entropy += self.cfg.w_entropy * torch.sum(log_var21_2, dim=1).mean() / 2.0
+                loss_entropy = self.cfg.w_entropy * torch.sum(log_var21_2, dim=1).mean() / 2.0
         else:
-            loss_entropy = -self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
-            if self.cfg.with_bk:
-                loss_entropy -= self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
+            if self.cfg.diag_dominant:
+                loss_entropy = -self.cfg.w_entropy * torch.sum(torch.log(diag12_2), dim=1).mean()
+                if self.cfg.with_bk:
+                    loss_entropy -= self.cfg.w_entropy * torch.sum(torch.log(diag21_2), dim=1).mean()
+            else:
+                loss_entropy = -self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
+                if self.cfg.with_bk:
+                    loss_entropy -= self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
+
 
         # Reparametrization trick
         if self.cfg.diag:
             flow12_2 = self.reparam_diag(mean12_2, log_var12_2)
             flow21_2 = self.reparam_diag(mean21_2, log_var21_2)
         else:
-            flow12_2 = self.reparam_triag(mean12_2, log_diag12_2, left12_2, over12_2)
-            flow21_2 = self.reparam_triag(mean21_2, log_diag21_2, left21_2, over21_2)
+            flow12_2 = self.reparam_triag(mean12_2, diag12_2, left12_2, over12_2)
+            flow21_2 = self.reparam_triag(mean21_2, diag21_2, left21_2, over21_2)
 
         # Upsample flow 4x
         flow12_1 = upsample(flow12_2, is_flow=True, align_corners=self.cfg.align_corners)

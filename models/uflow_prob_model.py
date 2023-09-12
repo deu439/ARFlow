@@ -259,7 +259,8 @@ class PWCProbFlow(nn.Module):
 
         refined_out = out + refinement
         flow, log_diag, rest = torch.split(refined_out, [2, 2, self._out_channels - 4], dim=1)
-        outs[0] = torch.cat([flow, torch.clamp(log_diag, max=10.0), torch.clamp(rest, min=-1e4, max=1e4)], dim=1)
+        #outs[0] = torch.cat([flow, torch.clamp(log_diag, max=10.0), torch.clamp(rest, min=-1e4, max=1e4)], dim=1)
+        outs[0] = torch.cat([flow, torch.clamp(log_diag, min=-5.0), rest], dim=1)
 
         # clip channels 2, 3 to max 10
         #if self._out_channels >= 4:

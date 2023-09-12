@@ -87,7 +87,7 @@ class BackwardSubst(Function):
 def check_gradient():
     M = 10   # Rows
     N = 10   # Cols
-    A = torch.ones((2, 2, M, N), requires_grad=True, dtype=torch.double).cuda()
+    A = np.exp(5)*torch.ones((2, 2, M, N), requires_grad=True, dtype=torch.double).cuda()
     B = torch.randn(2, 2, M, N-1, requires_grad=True, dtype=torch.double).cuda() # left
     C = torch.randn(2, 2, M-1, N, requires_grad=True, dtype=torch.double).cuda() # up
     X = torch.randn(2, 2, M, N, requires_grad=True, dtype=torch.double).cuda()
@@ -102,39 +102,48 @@ def check_gradient():
 
 
 def check_solver():
-    M = 4  # Rows
-    N = 4  # Cols
-    A = torch.ones((1, 1, M, N))
-    B = torch.randn(1, 1, M, N - 1)  # left
-    C = torch.randn(1, 1, M - 1, N)  # up
-    X = torch.randn(1, 1, M, N)
+    M = 10  # Rows
+    N = 15  # Cols
+    A = np.exp(-2)*torch.ones((8, 2, M, N))
+    B = 2*torch.randn(8, 2, M, N - 1)  # left
+    C = 2*torch.randn(8, 2, M - 1, N)  # up
+    X = torch.randn(8, 2, M, N)
+
+    A[:, :, :, 1:] += B
+    A[:, :, 1:, :] += C
+
+    # Solve in python
+    t = time.time()
+    Y = backward_substitution(A, B, C, X)
+    #print("Python:", time.time() - t)
+    print(Y)
+
+    # Solve in cpp
+    #t = time.time()
+    #Yp = triag_solve_cuda.backward_substitution(A.cuda(), B.cuda(), C.cuda(), X.cuda())
+    ##print("Cpp:", time.time() - t)
+    #print("Max err:", torch.max(torch.abs(Y - Yp.cpu())))
 
     # Solve with vectorization
-    #a = A.ravel()
+    #A = A.squeeze().numpy()
+    #B = B.squeeze().numpy()
+    #C = C.squeeze().numpy()
+    #X = X.squeeze().numpy()
+    #a = A.ravel()   # Row-wise stacking
     #b = B.ravel()
     #c = C.ravel()
     #x = X.ravel()
     #A_mat = np.diag(a)
     #B_mat = sp.linalg.block_diag(*[np.diag(B[i, :], -1) for i in range(M)])
-    #C_mat = np.diag(c, -M)
+    #C_mat = np.diag(c, -N)
     #H_mat = A_mat + B_mat + C_mat
-    #y = np.linalg.solve(H_mat, x)
+    #np.set_printoptions(precision=3)
+    #y = sp.linalg.solve_triangular(H_mat.T, x)
     #Y = y.reshape(M, N)
     #print(Y)
 
-    # Solve in python
-    t = time.time()
-    Y = backward_substitution(A, B, C, X)
-    print("Python:", time.time() - t)
-    print(Y)
-
-    # Solve in cpp
-    t = time.time()
-    Y = triag_solve_cuda.backward_substitution(A.cuda(), B.cuda(), C.cuda(), X.cuda())
-    print("Cpp:", time.time() - t)
-    print(Y.squeeze())
 
 
 if __name__ == '__main__':
     torch.use_deterministic_algorithms(True)
-    check_gradient()
+    check_solver()
