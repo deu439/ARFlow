@@ -84,6 +84,20 @@ class BackwardSubst(Function):
         return dA, dB, dC, dX
 
 
+def marginal_variances(A, B, C):
+    H = np.zeros_like(A)
+    for i in range(A.size(0)):
+        for j in range(A.size(1)):
+            # Initialize unit vector
+            X = torch.zeros_like(A)
+            X[:,:,i,j] = 1
+            # Solve the system
+            Y = triag_solve_cuda.forward_substitution(A, B, C, X)
+            H[:,:,i,j] = torch.pow(Y[:,:,i,j], 2)
+
+    return H
+
+
 def check_gradient():
     M = 10   # Rows
     N = 10   # Cols
@@ -102,21 +116,24 @@ def check_gradient():
 
 
 def check_solver():
-    M = 10  # Rows
-    N = 15  # Cols
+    M = 100  # Rows
+    N = 150  # Cols
     A = np.exp(-2)*torch.ones((8, 2, M, N))
-    B = 2*torch.randn(8, 2, M, N - 1)  # left
-    C = 2*torch.randn(8, 2, M - 1, N)  # up
+    B = torch.randn(8, 2, M, N - 1)  # left
+    C = torch.randn(8, 2, M - 1, N)  # up
     X = torch.randn(8, 2, M, N)
 
     A[:, :, :, 1:] += B
     A[:, :, 1:, :] += C
 
     # Solve in python
-    t = time.time()
+    #t = time.time()
     Y = backward_substitution(A, B, C, X)
+    #Y = triag_solve_cuda.backward_substitution(A.cuda(), B.cuda(), C.cuda(), X.cuda())
     #print("Python:", time.time() - t)
     print(Y)
+    print('min: ', torch.min(Y))
+    print('max: ', torch.max(Y))
 
     # Solve in cpp
     #t = time.time()
