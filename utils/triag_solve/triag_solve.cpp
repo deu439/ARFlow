@@ -3,6 +3,7 @@
 // CUDA kernel forward declarations
 torch::Tensor forward_substitution_cuda(torch::Tensor A, torch::Tensor B, torch::Tensor C, torch::Tensor Y);
 torch::Tensor backward_substitution_cuda(torch::Tensor A, torch::Tensor B, torch::Tensor C, torch::Tensor Y);
+torch::Tensor inverse_diagonal_cuda(torch::Tensor A, torch::Tensor B, torch::Tensor C);
 
 #define CHECK_CUDA(x) TORCH_CHECK(x.device().is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
@@ -32,7 +33,17 @@ torch::Tensor backward_substitution(torch::Tensor A, torch::Tensor B, torch::Ten
     return backward_substitution_cuda(A, B, C, Y);
 }
 
+torch::Tensor inverse_diagonal(torch::Tensor A, torch::Tensor B, torch::Tensor C) {
+    // Check inputs
+    CHECK_INPUT(A);
+    CHECK_INPUT(B);
+    CHECK_INPUT(C);
+
+    return inverse_diagonal_cuda(A, B, C);
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("forward_substitution", &forward_substitution, "Forward substitution");
-  m.def("backward_substitution", &backward_substitution, "Backward substitution");
+  m.def("forward_substitution", &forward_substitution, "Solve L*y=x using forward substitution.");
+  m.def("backward_substitution", &backward_substitution, "Solve L^T*y=x using back substitution.");
+  m.def("inverse_diagonal", &inverse_diagonal, "Calculate diagonal of (L*L^T)^{-1}.");
 }
