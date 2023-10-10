@@ -185,7 +185,7 @@ def marginal_variances_fast(A, B, C):
 
 def inverse_l1norm(A, B, C):
     """
-    Computes an approximation to ||J^{-1}||_1 using Algorithm 5.1 of [1].
+    Computes an approximation to ||L^{-1}||_1 using Algorithm 5.1 of [1].
 
     [1] N. J. Higham, “A survey of condition number estimation for triangular matrices,” SIAM Review, vol. 29, no. 4, pp.
     575–596, Dec. 1987.
@@ -197,7 +197,7 @@ def inverse_l1norm(A, B, C):
     B = B.view(1,1,M,N-1).contiguous()
     C = C.view(1,1,M-1,N).contiguous()
 
-    while True:
+    for n in range(100):    # Do not run forever
         # Solve A*y = x
         #Y = forward_substitution(A, B, C, X.view(1,1,M,N)).squeeze()
         Y = triag_solve_cuda.forward_substitution(A, B, C, X.view(1,1,M,N).contiguous()).squeeze()
