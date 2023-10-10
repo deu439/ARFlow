@@ -47,11 +47,13 @@ class FeatureExtractor(nn.Module):
         for l, (ch_in, ch_out) in enumerate(zip(num_chs[:-1], num_chs[1:])):
             layer = nn.Sequential(
                 conv(ch_in, ch_out, stride=2),
+                conv(ch_out, ch_out),
                 conv(ch_out, ch_out)
             )
             self.convs.append(layer)
 
     def forward(self, x):
+        x = x * 2. - 1.  # Rescale input from [0,1] to [-1, 1]
         feature_pyramid = []
         for conv in self.convs:
             x = conv(x)
@@ -134,6 +136,8 @@ class PWCLiteUflow(nn.Module):
         self.level_dropout = cfg.level_dropout
         self.leakyRELU = nn.LeakyReLU(0.1, inplace=True)
         self.feature_norm = cfg.feature_norm
+        self.align_corners = cfg.align_corners
+        self.warp_pad = cfg.warp_pad
 
         self.feature_pyramid_extractor = FeatureExtractor(self.num_chs)
 
@@ -202,8 +206,8 @@ class PWCLiteUflow(nn.Module):
             if l == 0:
                 x2_warp = x2
             else:
-                flow = F.interpolate(flow * 2, scale_factor=2, mode='bilinear', align_corners=True)
-                x2_warp = flow_warp(x2, flow)
+                flow = F.interpolate(flow * 2, scale_factor=2, mode='bilinear', align_corners=self.align_corners)
+                x2_warp = flow_warp(x2, flow, align_corners=self.align_corners, pad=self.warp_pad)
 
             # correlation volume
             if self.feature_norm:
@@ -240,8 +244,10 @@ class PWCLiteUflow(nn.Module):
         flows[-1] = flow
 
         # Append upsampled flow
-        upsampled_flow = F.interpolate(flow * 4, scale_factor=4, mode='bilinear', align_corners=True)
-        flows.append(upsampled_flow)
+        flow = F.interpolate(flow * 2, scale_factor=2, mode='bilinear', align_corners=self.align_corners)
+        flows.append(flow)
+        flow = F.interpolate(flow * 2, scale_factor=2, mode='bilinear', align_corners=self.align_corners)
+        flows.append(flow)
 
         return flows[::-1]
 

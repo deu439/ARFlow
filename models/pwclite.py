@@ -6,6 +6,7 @@ from utils.warp_utils import flow_warp
 #from .correlation_package.correlation import Correlation
 from .correlation_native import Correlation
 
+
 def conv(in_planes, out_planes, kernel_size=3, stride=1, dilation=1, isReLU=True):
     if isReLU:
         return nn.Sequential(
@@ -197,8 +198,9 @@ class PWCLite(nn.Module):
             if l == self.output_level:
                 break
         if self.upsample:
-            flows = [F.interpolate(flow * 4, scale_factor=4,
-                                   mode='bilinear', align_corners=True) for flow in flows]
+            #flows = [F.interpolate(flow * 4, scale_factor=4,
+            #                       mode='bilinear', align_corners=True) for flow in flows]
+            flows.append(F.interpolate(flow * 4, scale_factor=4, mode='bilinear', align_corners=True))
         return flows[::-1]
 
     def forward_3_frames(self, x0_pyramid, x1_pyramid, x2_pyramid):

@@ -2,7 +2,7 @@ import numpy as np
 import torch
 # from skimage.color import rgb2yuv
 import cv2
-from fast_slic.avx2 import SlicAvx2 as Slic
+#from fast_slic.avx2 import SlicAvx2 as Slic
 from skimage.segmentation import slic as sk_slic
 
 

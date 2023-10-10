@@ -2,9 +2,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+def penalty_ddflow(diff, eps=0.01, q=0.4):
+  return torch.pow((torch.abs(diff) + eps), q)
+
+def penalty_uflow(x):
+  return torch.sqrt(torch.pow(x, 2.0) + 0.001**2)
 
 # Crecit: https://github.com/simonmeister/UnFlow/blob/master/src/e2eflow/core/losses.py
-def TernaryLoss(im, im_warp, max_distance=1):
+def TernaryLoss(im, im_warp, max_distance=1, sum_dist=False):
     patch_size = 2 * max_distance + 1
 
     def _rgb_to_grayscale(image):
@@ -26,7 +31,10 @@ def TernaryLoss(im, im_warp, max_distance=1):
     def _hamming_distance(t1, t2):
         dist = torch.pow(t1 - t2, 2)
         dist_norm = dist / (0.1 + dist)
-        dist_mean = torch.mean(dist_norm, 1, keepdim=True)  # instead of sum
+        if sum_dist:
+            dist_mean = torch.sum(dist_norm, 1, keepdim=True)   # uflow version
+        else:
+            dist_mean = torch.mean(dist_norm, 1, keepdim=True)  # ARFlow version
         return dist_mean
 
     def _valid_mask(t, padding):
@@ -35,12 +43,23 @@ def TernaryLoss(im, im_warp, max_distance=1):
         mask = F.pad(inner, [padding] * 4)
         return mask
 
+    def _valid_mask_morph(mask, max_distance):
+        out_channels = patch_size * patch_size
+        w = torch.eye(out_channels).view((out_channels, 1, patch_size, patch_size))
+        weights = w.type_as(mask)
+        patches = F.conv2d(mask, weights, padding=max_distance)
+        mask = torch.min(patches)
+        return mask
+
+    # Calculate hamming distance between two census encodings
     t1 = _ternary_transform(im)
     t2 = _ternary_transform(im_warp)
     dist = _hamming_distance(t1, t2)
+
+    # Get valid mask
     mask = _valid_mask(im, max_distance)
 
-    return dist * mask
+    return dist, mask
 
 
 def SSIM(x, y, md=1):
@@ -71,15 +90,21 @@ def gradient(data):
     return D_dx, D_dy
 
 
-def smooth_grad_1st(flo, image, alpha):
+def smooth_grad_1st(flo, image, alpha, penalty="abs"):
     img_dx, img_dy = gradient(image)
     weights_x = torch.exp(-torch.mean(torch.abs(img_dx), 1, keepdim=True) * alpha)
     weights_y = torch.exp(-torch.mean(torch.abs(img_dy), 1, keepdim=True) * alpha)
 
     dx, dy = gradient(flo)
 
-    loss_x = weights_x * dx.abs() / 2.
-    loss_y = weights_y * dy.abs() / 2
+    if penalty == "abs":
+        loss_x = weights_x * dx.abs() / 2.
+        loss_y = weights_y * dy.abs() / 2.
+    elif penalty == "uflow":
+        loss_x = weights_x * penalty_uflow(dx) / 2.
+        loss_y = weights_y * penalty_uflow(dy) / 2.
+    else:
+        raise NotImplementedError()
 
     return loss_x.mean() / 2. + loss_y.mean() / 2.
 
