@@ -1,6 +1,7 @@
 *.py[cod]
 __pycache__/
 .idea/
+venv/
 utils/triag_solve/build
 utils/triag_solve/dist
 *.egg-info

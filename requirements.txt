@@ -2,8 +2,8 @@ imageio
 matplotlib
 scikit-image
 easydict
-torch==1.1.0
-torchvision==0.3.0
+torch
+torchvision
 
 path.py
 opencv-python>=3.0,<4.0
