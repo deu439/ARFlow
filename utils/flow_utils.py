@@ -31,6 +31,38 @@ def load_flow(path):
         return data2D
 
 
+def write_flow(filename, uv, v=None):
+    """ Write optical flow to file.
+
+    If v is None, uv is assumed to contain both u and v channels,
+    stacked in depth.
+    Original code by Deqing Sun, adapted from Daniel Scharstein.
+    """
+    nBands = 2
+    TAG_CHAR = np.array([202021.25], np.float32)
+
+    if v is None:
+        assert (uv.ndim == 3)
+        assert (uv.shape[2] == 2)
+        u = uv[:, :, 0]
+        v = uv[:, :, 1]
+    else:
+        u = uv
+
+    assert (u.shape == v.shape)
+    height, width = u.shape
+    f = open(filename, 'wb')
+    # write the header
+    f.write(TAG_CHAR)
+    np.array(width).astype(np.int32).tofile(f)
+    np.array(height).astype(np.int32).tofile(f)
+    # arrange into matrix form
+    tmp = np.zeros((height, width * nBands))
+    tmp[:, np.arange(width) * 2] = u
+    tmp[:, np.arange(width) * 2 + 1] = v
+    tmp.astype(np.float32).tofile(f)
+    f.close()
+
 def flow_to_image(flow, max_flow=256):
     if max_flow is not None:
         max_flow = max(max_flow, 1.)
@@ -74,11 +106,11 @@ def torch_flow2rgb(tensor):
     return torch.Tensor(np.transpose(array, (0, 3, 1, 2)))
 
 
-def resize_flow(flow, new_shape):
+def resize_flow(flow, new_shape, align_corners=False):
     _, _, h, w = flow.shape
     new_h, new_w = new_shape
     flow = torch.nn.functional.interpolate(flow, (new_h, new_w),
-                                           mode='bilinear', align_corners=True)
+                                           mode='bilinear', align_corners=align_corners)
     scale_h, scale_w = h / float(new_h), w / float(new_w)
     flow[:, 0] /= scale_w
     flow[:, 1] /= scale_h
@@ -194,7 +226,7 @@ def sp_plot(error, entropy, n=25, alpha=100.0, eps=1e-1):
     return splot
 
 
-def evaluate_uncertainty(gt_flows, pred_flows, pred_logvars):
+def evaluate_uncertainty(gt_flows, pred_flows, pred_logvars, sp_samples=25):
     sauc, oauc = 0, 0
     splots, oplots = [], []
     B = len(gt_flows)
@@ -229,7 +261,7 @@ def evaluate_uncertainty(gt_flows, pred_flows, pred_logvars):
         #plt.show()
 
         # Cummulate AUC
-        frac = np.linspace(0, 1, 25)
+        frac = np.linspace(0, 1, sp_samples)
         sauc += np.trapz(splot / splot[0], x=frac)
         oauc += np.trapz(oplot / oplot[0], x=frac)
 

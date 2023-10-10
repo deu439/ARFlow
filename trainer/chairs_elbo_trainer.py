@@ -17,7 +17,7 @@ class TrainFramework(BaseTrainer):
         am_batch_time = AverageMeter()
         am_data_time = AverageMeter()
 
-        key_meter_names = ['Loss', 'l_ph', 'l_sm', 'entropy', 'flow_mean']
+        key_meter_names = ['Loss', 'l_ph', 'l_sm', 'entropy', 'inv_l1norm']
         key_meters = AverageMeter(i=len(key_meter_names), precision=4)
 
         self.model.train()
@@ -42,13 +42,13 @@ class TrainFramework(BaseTrainer):
             flows_12, flows_21 = res_dict['flows_fw'], res_dict['flows_bw']
             flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
                      zip(flows_12, flows_21)]
-            loss, l_ph, l_sm, entropy, flow_mean = self.loss_func(flows, img_pair)
+            loss, l_ph, l_sm, entropy, inv_l1norm = self.loss_func(flows, img_pair)
 
             # make sure loss does not contain NaNs
             assert (not np.isnan(loss.item())), "training loss is NaN"
 
             # update meters
-            key_meters.update([loss.item(), l_ph.item(), l_sm.item(), entropy.item(), flow_mean.item()],
+            key_meters.update([loss.item(), l_ph.item(), l_sm.item(), entropy.item(), inv_l1norm],
                               img_pair.size(0))
 
             # compute gradient and do optimization step

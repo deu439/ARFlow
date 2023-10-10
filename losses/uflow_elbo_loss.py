@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_invalid, census_loss, image_grads, robust_l1, upsample
-from utils.triag_solve import BackwardSubst
+from utils.triag_solve import BackwardSubst, inverse_l1norm
 
 
 class UFlowElboLoss(nn.modules.Module):
@@ -76,7 +76,18 @@ class UFlowElboLoss(nn.modules.Module):
         im1_0 = target[:, :3]
         im2_0 = target[:, 3:]
 
-        # Calculate entropy loss
+        # Calculate l1 norm of the precision matrix inverse #
+        #####################################################
+        K, L = mean12_2.shape[0:2]
+        inv_l1norm = 0.0
+        for k in range(K):
+            for l in range(L):
+                out12 = inverse_l1norm(diag12_2[k, l], left12_2[k, l], over12_2[k, l]).item()
+                out21 = inverse_l1norm(diag21_2[k, l], left21_2[k, l], over21_2[k, l]).item()
+                inv_l1norm = max(inv_l1norm, out12, out21)
+
+        # Calculate entropy loss #
+        ##########################
         if self.cfg.diag:
             loss_entropy = self.cfg.w_entropy * torch.sum(log_var12_2, dim=1).mean() / 2.0
             if self.cfg.with_bk:
@@ -91,8 +102,8 @@ class UFlowElboLoss(nn.modules.Module):
                 if self.cfg.with_bk:
                     loss_entropy -= self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
 
-
-        # Reparametrization trick
+        # Reparametrization trick #
+        ###########################
         if self.cfg.diag:
             flow12_2 = self.reparam_diag(mean12_2, log_var12_2)
             flow21_2 = self.reparam_diag(mean21_2, log_var21_2)
@@ -160,4 +171,4 @@ class UFlowElboLoss(nn.modules.Module):
         ########################
         total_loss = loss_warp + loss_smooth - loss_entropy
 
-        return total_loss, loss_warp, loss_smooth, loss_entropy, output[0].abs().mean()
+        return total_loss, loss_warp, loss_smooth, loss_entropy, inv_l1norm
