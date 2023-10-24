@@ -109,6 +109,12 @@ class PWCProbFlow(nn.Module):
         self._shared_flow_decoder = False
         self._align_corners = cfg.align_corners
         self._out_channels = cfg.out_channels
+        # There's no more than 4 channels at intermediate levels, because upsampling off-diagonal elements of covariance
+        # or precision matrix does not make sense.
+        self._out_channels_int = 4
+        # Offset added to the diagonal elements of covariance/precision matrix when upsampling.
+        self._diag_offset = -math.log(2) if cfg.inv_cov else math.log(2)
+        self._inv_cov = cfg.inv_cov
 
         self._refine_model = self._build_refinement_model()
         self._flow_layers = self._build_flow_layers()
@@ -126,35 +132,38 @@ class PWCProbFlow(nn.Module):
     def init_weights(self):
         for layer in self.named_modules():
             if isinstance(layer, nn.Conv2d):
-                #nn.init.kaiming_normal_(layer.weight.data, mode='fan_in')
-                torch.nn.init.xavier_uniform(layer.weight)
+                nn.init.kaiming_normal_(layer.weight.data, mode='fan_in')
+                #torch.nn.init.xavier_uniform(layer.weight)
                 if layer.bias is not None:
                     nn.init.constant_(layer.bias, 0)
 
             elif isinstance(layer, nn.ConvTranspose2d):
-                #nn.init.kaiming_normal_(layer.weight.data, mode='fan_in')
-                torch.nn.init.xavier_uniform(layer.weight)
+                nn.init.kaiming_normal_(layer.weight.data, mode='fan_in')
+                #torch.nn.init.xavier_uniform(layer.weight)
                 if layer.bias is not None:
                     nn.init.constant_(layer.bias, 0)
 
     def upsample_out(self, out):
-        if self._out_channels > 2:
-            flow, rest = torch.split(out, [2, self._out_channels - 2], dim=1)
+        channels = out.shape[1]
+        if channels > 4:
+            flow, log_diag, rest = torch.split(out, [2, 2, channels - 4], dim=1)
             flow_up = uflow_utils.upsample(flow, is_flow=True, align_corners=self._align_corners)
-            # log_var_up = uflow_utils.upsample(log_var + 2*math.log(2), is_flow=False, align_corners=self._align_corners)
+            log_diag_up = uflow_utils.upsample(log_diag + self._diag_offset, is_flow=False,
+                                               align_corners=self._align_corners)
             rest_up = uflow_utils.upsample(rest, is_flow=False, align_corners=self._align_corners)
-            out_up = torch.cat([flow_up, rest_up], dim=1)
+            out_up = torch.cat([flow_up, log_diag_up, rest_up], dim=1)
         else:
-            flow = out
+            flow, log_diag = torch.split(out, [2, 2], dim=1)
             flow_up = uflow_utils.upsample(flow, is_flow=True, align_corners=self._align_corners)
-            out_up = flow_up
+            log_diag_up = uflow_utils.upsample(log_diag + self._diag_offset, is_flow=False,
+                                               align_corners=self._align_corners)
+            out_up = torch.cat([flow_up, log_diag_up], dim=1)
 
-        return flow_up, out_up
+        return out_up
 
     def forward_2_frames(self, feature_pyramid1, feature_pyramid2):
         """Run the model."""
         context = None
-        flow_up = None
         context_up = None
         out_up = None
         outs = []
@@ -163,20 +172,24 @@ class PWCProbFlow(nn.Module):
         for level, (features1, features2) in reversed(
                 list(enumerate(zip(feature_pyramid1, feature_pyramid2)))[1:]):
 
-            # init flows with zeros for coarsest level if needed
-            if self._shared_flow_decoder and flow_up is None:
-                batch_size, height, width, _ = features1.shape.as_list()
-                flow_up = torch.zeros([batch_size, height, width, 2]).to(features1.device)
+            # Initialize for coarsest level
+            if out_up is None:
+                batch_size, _, height, width = list(features1.shape)
+                flow_up = torch.zeros([batch_size, 2, height, width], device=features1.device)
+                # Start at log_diag ~ 0.0 at level 2 (the output level)
+                log_diag_up = -(self._num_levels-2) * self._diag_offset \
+                              * torch.ones([batch_size, 2, height, width], device=features1.device)
+                out_up = torch.cat([flow_up, log_diag_up], dim=1)
+
                 if self._num_context_up_channels:
-                    num_channels = int(self._num_context_up_channels *
-                                       self._channel_multiplier)
-                    context_up = torch.zeros([batch_size, height, width, num_channels]).to(features1.device)
+                    num_channels = int(self._num_context_up_channels * self._channel_multiplier)
+                    context_up = torch.zeros([batch_size, num_channels, height, width]).to(features1.device)
 
             # Warp features2 with upsampled flow from higher level.
-            if flow_up is None or not self._use_feature_warp:
+            if out_up is None or not self._use_feature_warp:
                 warped2 = features2
             else:
-                warp_up = uflow_utils.flow_to_warp(flow_up)
+                warp_up = uflow_utils.flow_to_warp(out_up[:, 0:2])
                 warped2 = uflow_utils.resample2(features2, warp_up)
 
             # Compute cost volume by comparing features1 and warped features2.
@@ -206,13 +219,6 @@ class PWCProbFlow(nn.Module):
                 x_in = torch.cat([out_up, x_in], dim=1)
             if context_up is not None:
                 x_in = torch.cat([context_up, x_in], dim=1)
-            #if flow_up is None:
-            #    x_in = torch.cat([cost_volume, features1], dim=1)
-            #else:
-            #    if context_up is None:
-            #        x_in = torch.cat([out_up, cost_volume, features1], dim=1)
-            #    else:
-            #        x_in = torch.cat([context_up, out_up, cost_volume, features1], dim=1)
 
             # Use dense-net connections.
             x_out = None
@@ -233,11 +239,18 @@ class PWCProbFlow(nn.Module):
                 context = context * maybe_dropout
                 out = out * maybe_dropout
 
+            # Pad channels if needed
+            if out.shape[1] > self._out_channels_int:
+                shape = list(out_up.shape)
+                shape[1] = self._out_channels - out_up.shape[1]
+                padding = torch.zeros(shape).type_as(out_up)
+                out_up = torch.cat((out_up, padding), 1)
+
             if out_up is not None and self._accumulate_flow:
                 out = out + out_up
 
             # Upsample for the next lower level - treat the flow channels separately!
-            flow_up, out_up = self.upsample_out(out)
+            out_up = self.upsample_out(out)
 
             if self._num_context_up_channels:
                 context_up = self._context_up_layers[level](context)
@@ -245,8 +258,14 @@ class PWCProbFlow(nn.Module):
             # Append results to list.
             outs.insert(0, out)
 
+        # Pad channels if needed
+        if out.shape[1] < self._out_channels:
+            shape = list(out.shape)
+            shape[1] = self._out_channels - out.shape[1]
+            padding = torch.zeros(shape).type_as(out)
+            out = torch.cat((out, padding), 1)
+
         # Refine flow at level 2
-        # refinement = self._refine_model(torch.cat([context, flow], dim=1))
         refinement = torch.cat([context, out], dim=1)
         for layer in self._refine_model:
             refinement = layer(refinement)
@@ -258,17 +277,18 @@ class PWCProbFlow(nn.Module):
             refinement = refinement * maybe_dropout
 
         refined_out = out + refinement
-        flow, log_diag, rest = torch.split(refined_out, [2, 2, self._out_channels - 4], dim=1)
-        #outs[0] = torch.cat([flow, torch.clamp(log_diag, max=10.0), torch.clamp(rest, min=-1e4, max=1e4)], dim=1)
-        outs[0] = torch.cat([flow, torch.clamp(log_diag, min=-5.0), rest], dim=1)
 
-        # clip channels 2, 3 to max 10
-        #if self._out_channels >= 4:
-        #    outs[0][:, 2:4] = torch.clamp(outs[0][:, 2:4], max=10.0)
+        flow, log_diag, rest = torch.split(refined_out, [2, 2, self._out_channels - 4], dim=1)
+        # Ensure log(precision)/2 is not too small
+        if self._inv_cov:
+            outs[0] = torch.cat([flow, torch.clamp(log_diag, min=-5.0), rest], dim=1)
+        # Ensure log(variance)/2 is not too large
+        else:
+            outs[0] = torch.cat([flow, torch.clamp(log_diag, max=10.0), rest], dim=1)
 
         # Upsample 4x up to the 0-th level
-        _, out_1 = self.upsample_out(outs[0])
-        _, out_0 = self.upsample_out(out_1)
+        out_1 = self.upsample_out(outs[0])
+        out_0 = self.upsample_out(out_1)
         outs.insert(0, out_1)
         outs.insert(0, out_0)
 
@@ -325,8 +345,9 @@ class PWCProbFlow(nn.Module):
         for i in range(1, self._num_levels):
             layers = nn.ModuleList()
             last_in_channels = (64+32) if not self._use_cost_volume else (81+32)
-            if i != self._num_levels-1:
-                last_in_channels += self._out_channels + self._num_context_up_channels
+            # In contrast to UFlow we feed zero-flow and constant variance/precision at the fifth level input
+            #if i != self._num_levels-1:
+            last_in_channels += self._out_channels_int + self._num_context_up_channels
 
             for c in block_layers:
                 layers.append(
@@ -344,7 +365,7 @@ class PWCProbFlow(nn.Module):
             layers.append(
                 nn.Conv2d(
                     in_channels=block_layers[-1],
-                    out_channels=self._out_channels,
+                    out_channels=self._out_channels if i == 1 else self._out_channels_int,
                     kernel_size=(3, 3),
                     padding='same'))
             if self._shared_flow_decoder:
@@ -390,6 +411,7 @@ class PWCProbFlow(nn.Module):
                     stride=1,
                     padding='same'))
         return result
+
 
 class PWCFeaturePyramid(nn.Module):
   """Model for computing a feature pyramid from an image."""
