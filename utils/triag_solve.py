@@ -8,6 +8,12 @@ import time
 import triag_solve_cuda
 
 
+def matrix_vector_product(A, B, C, X):
+    B_Y = torch.nn.functional.pad(B * X[:, :, :, 0:-1], (1, 0))
+    C_Y = torch.nn.functional.pad(C * X[:, :, 0:-1, :], (0, 0, 1, 0))
+    return A * X + B_Y + C_Y
+
+
 def forward_substitution(A, B, C, X):
     """
     Solves J*y=x where J is lower triangular matrix, represented by A: K x L x M x N (center pixels), B: K x L x M x N-1
@@ -199,16 +205,16 @@ def inverse_l1norm(A, B, C):
 
     for n in range(100):    # Do not run forever
         # Solve A*y = x
-        #Y = forward_substitution(A, B, C, X.view(1,1,M,N)).squeeze()
-        Y = triag_solve_cuda.forward_substitution(A, B, C, X.view(1,1,M,N).contiguous()).squeeze()
+        Y = forward_substitution(A, B, C, X.view(1,1,M,N)).squeeze()
+        #Y = triag_solve_cuda.forward_substitution(A, B, C, X.view(1,1,M,N).contiguous()).squeeze()
 
         # Form xi
         Xi = torch.ones_like(Y)
         Xi[Y < 0] = -1
 
         # Solve A^T*z = xi
-        #Z = backward_substitution(A, B, C, Xi.view(1,1,M,N)).squeeze()
-        Z = triag_solve_cuda.backward_substitution(A, B, C, Xi.view(1,1,M,N).contiguous()).squeeze()
+        Z = backward_substitution(A, B, C, Xi.view(1,1,M,N)).squeeze()
+        #Z = triag_solve_cuda.backward_substitution(A, B, C, Xi.view(1,1,M,N).contiguous()).squeeze()
 
         # If ||z||_inf <= z^T*x
         absZ = torch.abs(Z)
@@ -222,6 +228,8 @@ def inverse_l1norm(A, B, C):
         X.zero_()
         X[ind_h, ind_w] = 1
 
+    return torch.Tensor([float('inf')]).type_as(A)
+
 
 def inverse_l1norm_exact(A, B, C):
     M, N = A.shape
@@ -232,16 +240,27 @@ def inverse_l1norm_exact(A, B, C):
     C_mat = np.diag(c, -N)
     J_mat = A_mat + B_mat + C_mat
     S_mat = np.linalg.inv(J_mat)
-    return np.linalg.norm(S_mat, ord=1)
+    return np.linalg.norm(J_mat) * np.linalg.norm(S_mat, ord=1)
 
+def trans_inverse_l1norm_exact(A, B, C):
+    M, N = A.shape
+    a = A.ravel()   # Row-wise stacking
+    c = C.ravel()
+    A_mat = np.diag(a)
+    B_mat = sp.linalg.block_diag(*[np.diag(B[i, :], -1) for i in range(M)])
+    C_mat = np.diag(c, -N)
+    J_mat = A_mat + B_mat + C_mat
+    S_mat = np.linalg.inv(J_mat.T)
+    #return np.linalg.norm(S_mat, ord=1)
+    return np.linalg.norm(J_mat.T) * np.linalg.norm(S_mat, ord=1)
 
 def check_gradient():
-    M = 10   # Rows
-    N = 10   # Cols
-    A = np.exp(5)*torch.ones((2, 2, M, N), requires_grad=True, dtype=torch.double).cuda()
-    B = torch.randn(2, 2, M, N-1, requires_grad=True, dtype=torch.double).cuda() # left
-    C = torch.randn(2, 2, M-1, N, requires_grad=True, dtype=torch.double).cuda() # up
-    X = torch.randn(2, 2, M, N, requires_grad=True, dtype=torch.double).cuda()
+    M = 15   # Rows
+    N = 15   # Cols
+    A = 20*torch.ones((2, 2, M, N), requires_grad=True, dtype=torch.double)
+    B = torch.randn(2, 2, M, N-1, requires_grad=True, dtype=torch.double) # left
+    C = torch.randn(2, 2, M-1, N, requires_grad=True, dtype=torch.double) # up
+    X = torch.randn(2, 2, M, N, requires_grad=True, dtype=torch.double)
 
     # Exact gradient
     res = gradcheck(ForwardSubst().apply, (A, B, C, X))
@@ -255,7 +274,7 @@ def check_gradient():
 def check_solver():
     M = 50  # Rows
     N = 50  # Cols
-    A = 2*torch.ones((1, 1, M, N))
+    A = 10*torch.ones((1, 1, M, N))
     B = torch.randn(1, 1, M, N - 1)  # left
     C = torch.randn(1, 1, M - 1, N)  # up
     X = torch.randn(1, 1, M, N)
@@ -273,6 +292,10 @@ def check_solver():
     print("Runtime python:", time.process_time() - t, "s")
     print(Yp)
     print("Python max err:", np.max(np.abs(Yn - Yp.squeeze().numpy())))
+
+    # Matrix vector product
+    res = matrix_vector_product(A, B, C, Yp) - X
+    print("Residual: ", torch.sum(torch.abs(res)) / torch.sum(torch.abs(X)))
 
     # Solve on GPU
     #t = time.process_time()
@@ -299,7 +322,7 @@ def check_inverse_diagonal():
 def check_inverse_l1norm():
     M = 20  # Rows
     N = 20  # Cols
-    A = 1*torch.ones((M, N))
+    A = 10*torch.ones((M, N))
     B = torch.randn(M, N - 1)  # left
     C = torch.randn(M - 1, N)  # up
 
@@ -307,8 +330,10 @@ def check_inverse_l1norm():
     print("Approximate: ", norm)
     norm = inverse_l1norm_exact(A, B, C)
     print("Exact: ", norm)
+    norm = trans_inverse_l1norm_exact(A, B, C)
+    print("Trans Exact: ", norm)
 
 
 if __name__ == '__main__':
     torch.use_deterministic_algorithms(True)
-    check_inverse_l1norm()
+    check_solver()

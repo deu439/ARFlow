@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_invalid, census_loss, image_grads, robust_l1, upsample
-from utils.triag_solve import BackwardSubst, inverse_l1norm
+from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product
 
 
 class UFlowElboLoss(nn.modules.Module):
@@ -15,19 +15,40 @@ class UFlowElboLoss(nn.modules.Module):
         self.Normal.loc = self.Normal.loc.cuda() # hack to get sampling on the GPU
         self.Normal.scale = self.Normal.scale.cuda()
 
-    def reparam_diag(self, mean, log_var, nsamples=1):
+    def reparam_diag(self, mean, log_diag, nsamples=1):
         """
         Generates normal distributed samples with a given mean and variance.
         mean: mean - tensor of size (batch, 2, height, width)
-        log_var: log(variance) - tensor of size (batch, 2, height, width)
+        log_diag: log(variance)/2=log(std) - tensor of size (batch, 2, height, width)
         returns: samples - tensor of size (Nsamples*batch, 2, height, width)
         """
         mean = mean.repeat(nsamples, 1, 1, 1)
-        log_var = log_var.repeat(nsamples, 1, 1, 1)
-        z = mean + torch.exp(log_var / 2.0) * self.Normal.sample(mean.size())
+        log_diag = log_diag.repeat(nsamples, 1, 1, 1)
+        z = mean + torch.exp(log_diag) * self.Normal.sample(mean.size())
+        return z
+
+    def reparam_diag_inv(self, mean, log_diag, nsamples=1):
+        """
+        Generates normal distributed samples with a given mean and precision.
+        mean: mean - tensor of size (batch, 2, height, width)
+        log_diag: log(precision)/2 - tensor of size (batch, 2, height, width)
+        returns: samples - tensor of size (Nsamples*batch, 2, height, width)
+        """
+        mean = mean.repeat(nsamples, 1, 1, 1)
+        log_diag = log_diag.repeat(nsamples, 1, 1, 1)
+        z = mean + torch.exp(-log_diag) * self.Normal.sample(mean.size())
         return z
 
     def reparam_triag(self, mean, diag, left, over, nsamples=1):
+        mean = mean.repeat(nsamples, 1, 1, 1)
+        diag = diag.repeat(nsamples, 1, 1, 1)
+        left = left.repeat(nsamples, 1, 1, 1)
+        over = over.repeat(nsamples, 1, 1, 1)
+        eps = self.Normal.sample(mean.size())
+        z = mean + matrix_vector_product(diag, left, over, eps)
+        return z
+
+    def reparam_triag_inv(self, mean, diag, left, over, nsamples=1):
         mean = mean.repeat(nsamples, 1, 1, 1)
         diag = diag.repeat(nsamples, 1, 1, 1)
         left = left.repeat(nsamples, 1, 1, 1)
@@ -47,9 +68,9 @@ class UFlowElboLoss(nn.modules.Module):
         # Get level 2 outputs - before upsampling
         if self.cfg.diag:
             mean12_2 = output[2][:, 0:2]
-            log_var12_2 = output[2][:, 2:4]
+            log_diag12_2 = output[2][:, 2:4]
             mean21_2 = output[2][:, 4:6]
-            log_var21_2 = output[2][:, 6:8]
+            log_diag21_2 = output[2][:, 6:8]
         else:
             mean12_2 = output[2][:, 0:2]
             log_diag12_2 = output[2][:, 2:4]
@@ -66,12 +87,14 @@ class UFlowElboLoss(nn.modules.Module):
             diag21_2 = torch.exp(log_diag21_2)
             if self.cfg.diag_dominant:
                 diag12_2 = diag12_2 \
-                           + torch.nn.functional.pad(torch.abs(left12_2), (1, 0)) \
-                           + torch.nn.functional.pad(torch.abs(over12_2), (0, 0, 1, 0))
-
+                           + torch.max(torch.nn.functional.pad(torch.abs(left12_2), (1, 0)),
+                                       torch.nn.functional.pad(torch.abs(over12_2), (0, 0, 1, 0)))
                 diag21_2 = diag21_2 \
-                           + torch.nn.functional.pad(torch.abs(left21_2), (1, 0)) \
-                           + torch.nn.functional.pad(torch.abs(over21_2), (0, 0, 1, 0))
+                           + torch.max(torch.nn.functional.pad(torch.abs(left21_2), (1, 0)),
+                                       torch.nn.functional.pad(torch.abs(over21_2), (0, 0, 1, 0)))
+                # Update the log values
+                log_diag12_2 = torch.log(diag12_2)
+                log_diag21_2 = torch.log(diag21_2)
 
         im1_0 = target[:, :3]
         im2_0 = target[:, 3:]
@@ -80,36 +103,47 @@ class UFlowElboLoss(nn.modules.Module):
         #####################################################
         K, L = mean12_2.shape[0:2]
         inv_l1norm = 0.0
-        for k in range(K):
-            for l in range(L):
-                out12 = inverse_l1norm(diag12_2[k, l], left12_2[k, l], over12_2[k, l]).item()
-                out21 = inverse_l1norm(diag21_2[k, l], left21_2[k, l], over21_2[k, l]).item()
-                inv_l1norm = max(inv_l1norm, out12, out21)
-
-        # Calculate entropy loss #
-        ##########################
-        if self.cfg.diag:
-            loss_entropy = self.cfg.w_entropy * torch.sum(log_var12_2, dim=1).mean() / 2.0
-            if self.cfg.with_bk:
-                loss_entropy = self.cfg.w_entropy * torch.sum(log_var21_2, dim=1).mean() / 2.0
-        else:
-            if self.cfg.diag_dominant:
-                loss_entropy = -self.cfg.w_entropy * torch.sum(torch.log(diag12_2), dim=1).mean()
-                if self.cfg.with_bk:
-                    loss_entropy -= self.cfg.w_entropy * torch.sum(torch.log(diag21_2), dim=1).mean()
-            else:
-                loss_entropy = -self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
-                if self.cfg.with_bk:
-                    loss_entropy -= self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
+        #for k in range(K):
+        #    for l in range(L):
+        #        out12 = inverse_l1norm(diag12_2[k, l], left12_2[k, l], over12_2[k, l]).item()
+        #        out21 = inverse_l1norm(diag21_2[k, l], left21_2[k, l], over21_2[k, l]).item()
+        #        inv_l1norm = max(inv_l1norm, out12, out21)
 
         # Reparametrization trick #
         ###########################
-        if self.cfg.diag:
-            flow12_2 = self.reparam_diag(mean12_2, log_var12_2)
-            flow21_2 = self.reparam_diag(mean21_2, log_var21_2)
-        else:
+        if self.cfg.diag and not self.cfg.inv_cov:
+            flow12_2 = self.reparam_diag(mean12_2, log_diag12_2)
+            flow21_2 = self.reparam_diag(mean21_2, log_diag21_2)
+        elif self.cfg.diag and self.cfg.inv_cov:
+            flow12_2 = self.reparam_diag_inv(mean12_2, log_diag12_2)
+            flow21_2 = self.reparam_diag_inv(mean21_2, log_diag21_2)
+        elif not self.cfg.diag and not self.cfg.inv_cov:
             flow12_2 = self.reparam_triag(mean12_2, diag12_2, left12_2, over12_2)
             flow21_2 = self.reparam_triag(mean21_2, diag21_2, left21_2, over21_2)
+        elif not self.cfg.diag and self.cfg.inv_cov:
+            flow12_2 = self.reparam_triag_inv(mean12_2, diag12_2, left12_2, over12_2)
+            flow21_2 = self.reparam_triag_inv(mean21_2, diag21_2, left21_2, over21_2)
+
+        inv_l1norm = max(torch.max(flow12_2), torch.max(flow21_2))
+
+        # Calculate entropy loss #
+        ##########################
+        if self.cfg.diag and not self.cfg.inv_cov:
+            loss_entropy = self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
+            if self.cfg.with_bk:
+                loss_entropy += self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
+        elif self.cfg.diag and self.cfg.inv_cov:
+            loss_entropy = -self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
+            if self.cfg.with_bk:
+                loss_entropy -= self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
+        elif not self.cfg.diag and not self.cfg.inv_cov:
+            loss_entropy = self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
+            if self.cfg.with_bk:
+                loss_entropy += self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
+        elif not self.cfg.diag and self.cfg.inv_cov:
+            loss_entropy = -self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
+            if self.cfg.with_bk:
+                loss_entropy -= self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
 
         # Upsample flow 4x
         flow12_1 = upsample(flow12_2, is_flow=True, align_corners=self.cfg.align_corners)
@@ -134,6 +168,9 @@ class UFlowElboLoss(nn.modules.Module):
             valid_mask2 = mask_invalid(warp21_0)
             occu_mask2 = torch.clamp(compute_range_map(flow12_0), min=0., max=1.)
             mask2 = torch.detach(occu_mask2 * valid_mask2)
+        #mask1 = mask_invalid(warp12_0)
+        #if self.cfg.with_bk:
+        #    mask2 = mask_invalid(warp21_0)
 
         # Calculate photometric loss on level 0 #
         ############################################################
