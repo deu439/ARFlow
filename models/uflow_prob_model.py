@@ -112,8 +112,8 @@ class PWCProbFlow(nn.Module):
         # There's no more than 4 channels at intermediate levels, because upsampling off-diagonal elements of covariance
         # or precision matrix does not make sense.
         self._out_channels_int = 4
-        # Offset added to the diagonal elements of covariance/precision matrix when upsampling.
-        self._diag_offset = -math.log(2) if cfg.inv_cov else math.log(2)
+        # Bias added to the diagonal elements of covariance/precision matrix when upsampling.
+        self._diag_bias = -math.log(2) if cfg.inv_cov else math.log(2)
         self._inv_cov = cfg.inv_cov
 
         self._refine_model = self._build_refinement_model()
@@ -148,14 +148,14 @@ class PWCProbFlow(nn.Module):
         if channels > 4:
             flow, log_diag, rest = torch.split(out, [2, 2, channels - 4], dim=1)
             flow_up = uflow_utils.upsample(flow, is_flow=True, align_corners=self._align_corners)
-            log_diag_up = uflow_utils.upsample(log_diag + self._diag_offset, is_flow=False,
+            log_diag_up = uflow_utils.upsample(log_diag + self._diag_bias, is_flow=False,
                                                align_corners=self._align_corners)
             rest_up = uflow_utils.upsample(rest, is_flow=False, align_corners=self._align_corners)
             out_up = torch.cat([flow_up, log_diag_up, rest_up], dim=1)
         else:
             flow, log_diag = torch.split(out, [2, 2], dim=1)
             flow_up = uflow_utils.upsample(flow, is_flow=True, align_corners=self._align_corners)
-            log_diag_up = uflow_utils.upsample(log_diag + self._diag_offset, is_flow=False,
+            log_diag_up = uflow_utils.upsample(log_diag + self._diag_bias, is_flow=False,
                                                align_corners=self._align_corners)
             out_up = torch.cat([flow_up, log_diag_up], dim=1)
 
@@ -177,7 +177,7 @@ class PWCProbFlow(nn.Module):
                 batch_size, _, height, width = list(features1.shape)
                 flow_up = torch.zeros([batch_size, 2, height, width], device=features1.device)
                 # Start at log_diag ~ 0.0 at level 2 (the output level)
-                log_diag_up = -(self._num_levels-2) * self._diag_offset \
+                log_diag_up = -(self._num_levels-2) * self._diag_bias \
                               * torch.ones([batch_size, 2, height, width], device=features1.device)
                 out_up = torch.cat([flow_up, log_diag_up], dim=1)
 
@@ -347,7 +347,7 @@ class PWCProbFlow(nn.Module):
             last_in_channels = (64+32) if not self._use_cost_volume else (81+32)
             # In contrast to UFlow we feed zero-flow and constant variance/precision at the fifth level input
             #if i != self._num_levels-1:
-            last_in_channels += self._out_channels_int + self._num_context_up_channels
+            last_in_channels += self._out_channels_int + self._num_context_up_channels * self._channel_multiplier
 
             for c in block_layers:
                 layers.append(
@@ -364,7 +364,7 @@ class PWCProbFlow(nn.Module):
                 last_in_channels += int(c * self._channel_multiplier)
             layers.append(
                 nn.Conv2d(
-                    in_channels=block_layers[-1],
+                    in_channels=int(block_layers[-1] * self._channel_multiplier),
                     out_channels=self._out_channels if i == 1 else self._out_channels_int,
                     kernel_size=(3, 3),
                     padding='same'))
@@ -376,7 +376,7 @@ class PWCProbFlow(nn.Module):
     def _build_refinement_model(self):
         """Build model for flow refinement using dilated convolutions."""
         layers = []
-        last_in_channels = 32+self._out_channels
+        last_in_channels = 32*self._channel_multiplier+self._out_channels
         for c, d in [(128, 1), (128, 2), (128, 4), (96, 8), (64, 16), (32, 1)]:
             layers.append(
                 nn.Conv2d(
