@@ -104,10 +104,11 @@ class Sintel(ImgSeqDataset):
         img_dir = self.root / Path(self.dataset_type)
         flow_dir = self.root / 'flow'
 
-        assert img_dir.isdir() and flow_dir.isdir()
+        assert img_dir.isdir()
+        assert flow_dir.isdir() or not self.with_flow
 
         samples = []
-        for flow_map in sorted((self.root / flow_dir).glob('*/*.flo')):
+        for flow_map in sorted(img_dir.glob('*/*.png')):
             info = flow_map.splitall()
             scene, filename = info[-2:]
             fid = int(filename[-8:-4])

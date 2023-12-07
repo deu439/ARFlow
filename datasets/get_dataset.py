@@ -24,14 +24,14 @@ def get_dataset(all_cfg):
         ap_transform = get_ap_transforms(cfg.at_cfg) if cfg.run_at else None
 
         train_set_1 = Sintel(cfg.root_sintel, n_frames=cfg.train_n_frames, type='clean',
-                             split='training', subsplit=cfg.train_subsplit,
+                             split=cfg.train_split, subsplit=cfg.train_subsplit,
                              with_flow=False,
                              ap_transform=ap_transform,
                              transform=input_transform,
                              co_transform=co_transform
                              )
         train_set_2 = Sintel(cfg.root_sintel, n_frames=cfg.train_n_frames, type='final',
-                             split='training', subsplit=cfg.train_subsplit,
+                             split=cfg.train_split, subsplit=cfg.train_subsplit,
                              with_flow=False,
                              ap_transform=ap_transform,
                              transform=input_transform,
@@ -43,12 +43,12 @@ def get_dataset(all_cfg):
         valid_input_transform.transforms.insert(0, sep_transforms.Zoom(*cfg.test_shape))
 
         valid_set_1 = Sintel(cfg.root_sintel, n_frames=cfg.val_n_frames, type='clean',
-                             split='training', subsplit=cfg.val_subsplit,
+                             split=cfg.val_split, subsplit=cfg.val_subsplit,
                              transform=valid_input_transform,
                              target_transform={'flow': sep_transforms.ArrayToTensor()}
                              )
         valid_set_2 = Sintel(cfg.root_sintel, n_frames=cfg.val_n_frames, type='final',
-                             split='training', subsplit=cfg.val_subsplit,
+                             split=cfg.val_split, subsplit=cfg.val_subsplit,
                              transform=valid_input_transform,
                              target_transform={'flow': sep_transforms.ArrayToTensor()}
                              )
@@ -57,8 +57,9 @@ def get_dataset(all_cfg):
     elif cfg.type == 'Chairs':
         ap_transform = get_ap_transforms(cfg.at_cfg) if cfg.run_at else None
 
-        train_set = Chairs(cfg.root_chairs,  n_frames=cfg.train_n_frames, split='training', with_flow=False,
-                           ap_transform=ap_transform, transform=input_transform, co_transform=co_transform)
+        train_set = Chairs(cfg.root_chairs,  n_frames=cfg.train_n_frames, split='training', with_flow=True,
+                           ap_transform=ap_transform, transform=input_transform, co_transform=co_transform,
+                           target_transform={'flow': sep_transforms.ArrayToTensor()})
 
         valid_input_transform = copy.deepcopy(input_transform)
         valid_input_transform.transforms.insert(0, sep_transforms.Zoom(*cfg.test_shape))
