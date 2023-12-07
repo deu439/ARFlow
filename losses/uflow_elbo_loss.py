@@ -211,6 +211,15 @@ class UFlowElboLoss(nn.modules.Module):
 
         # Calculate smoothness loss on level 2 #
         ############################################################
+        if self.cfg.edge_penalty == 'abs':
+            edge_penalty = torch.abs
+        elif self.cfg.edge_penalty == 'charbonnier':
+            edge_penalty = lambda x: torch.sqrt(torch.square(x) + 1e-5)
+        elif self.cfg.edge_penalty == "square":
+            edge_penalty = torch.square
+        else:
+            raise ValueError("Unknown edge penalty function {}".format(self.cfg.edge_penalty))
+
         _, _, height, width = im1_0.size()
         im1_1 = F.interpolate(im1_0, scale_factor=0.5, mode='bilinear', align_corners=self.cfg.align_corners)
         im1_2 = F.interpolate(im1_1, scale_factor=0.5, mode='bilinear', align_corners=self.cfg.align_corners)
@@ -219,8 +228,8 @@ class UFlowElboLoss(nn.modules.Module):
 
         # Forward -----------
         im1_gx, im1_gy = image_grads(im1_2.detach())
-        weights1_x = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im1_gx), 1, keepdim=True))
-        weights1_y = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im1_gy), 1, keepdim=True))
+        weights1_x = torch.exp(-torch.mean(edge_penalty(self.cfg.edge_constant * im1_gx), 1, keepdim=True))
+        weights1_y = torch.exp(-torch.mean(edge_penalty(self.cfg.edge_constant * im1_gy), 1, keepdim=True))
 
         flow12_gx, flow12_gy = image_grads(flow12_2)
         loss_smooth = self.cfg.w_smooth * (torch.mean(weights1_x * robust_l1(flow12_gx))
@@ -228,8 +237,8 @@ class UFlowElboLoss(nn.modules.Module):
         if self.cfg.with_bk:
             # Backward -----------
             im2_gx, im2_gy = image_grads(im2_2.detach())
-            weights2_x = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im2_gx), 1, keepdim=True))
-            weights2_y = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im2_gy), 1, keepdim=True))
+            weights2_x = torch.exp(-torch.mean(edge_penalty(self.cfg.edge_constant * im2_gx), 1, keepdim=True))
+            weights2_y = torch.exp(-torch.mean(edge_penalty(self.cfg.edge_constant * im2_gy), 1, keepdim=True))
 
             flow21_gx, flow21_gy = image_grads(flow21_2)
             loss_smooth += self.cfg.w_smooth * (torch.mean(weights2_x * robust_l1(flow21_gx))
