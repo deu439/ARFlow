@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_invalid, census_loss, image_grads, robust_l1, upsample
-from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product
+from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product, matrix_vector_product_T
 
 
 class UFlowElboLoss(nn.modules.Module):
@@ -71,6 +71,8 @@ class UFlowElboLoss(nn.modules.Module):
             log_diag12_2 = output[2][:, 2:4]
             mean21_2 = output[2][:, 4:6]
             log_diag21_2 = output[2][:, 6:8]
+            diag12_2 = torch.exp(log_diag12_2)
+            diag21_2 = torch.exp(log_diag21_2)
         else:
             mean12_2 = output[2][:, 0:2]
             log_diag12_2 = output[2][:, 2:4]
@@ -129,9 +131,16 @@ class UFlowElboLoss(nn.modules.Module):
         # Calculate entropy loss #
         ##########################
         if self.cfg.diag and not self.cfg.inv_cov:
-            loss_entropy = self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
-            if self.cfg.with_bk:
-                loss_entropy += self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
+            if self.cfg.approx_entropy:
+                tmp12 = (flow12_2 - mean12_2.detach()) / diag12_2.detach()
+                loss_entropy = self.cfg.w_entropy * torch.sum(tmp12*tmp12/2, dim=1).mean()
+                if self.cfg.with_bk:
+                    tmp21 = (flow21_2 - mean21_2.detach()) / diag21_2.detach()
+                    loss_entropy += self.cfg.w_entropy * torch.sum(tmp21*tmp21/2, dim=1).mean()
+            else:
+                loss_entropy = self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
+                if self.cfg.with_bk:
+                    loss_entropy += self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
         elif self.cfg.diag and self.cfg.inv_cov:
             loss_entropy = -self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
             if self.cfg.with_bk:
@@ -141,9 +150,18 @@ class UFlowElboLoss(nn.modules.Module):
             if self.cfg.with_bk:
                 loss_entropy += self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
         elif not self.cfg.diag and self.cfg.inv_cov:
-            loss_entropy = -self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
-            if self.cfg.with_bk:
-                loss_entropy -= self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
+            if self.cfg.approx_entropy:
+                tmp12 = matrix_vector_product_T(diag12_2.detach(), left12_2.detach(), over12_2.detach(),
+                                                flow12_2 - mean12_2.detach())
+                loss_entropy = self.cfg.w_entropy * torch.sum(tmp12*tmp12/2, dim=1).mean()
+                if self.cfg.with_bk:
+                    tmp21 = matrix_vector_product_T(diag21_2.detach(), left21_2.detach(), over21_2.detach(),
+                                                    flow21_2 - mean21_2.detach())
+                    loss_entropy += self.cfg.w_entropy * torch.sum(tmp21*tmp21/2, dim=1).mean()
+            else:
+                loss_entropy = -self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
+                if self.cfg.with_bk:
+                    loss_entropy -= self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
 
         # Upsample flow 4x
         flow12_1 = upsample(flow12_2, is_flow=True, align_corners=self.cfg.align_corners)

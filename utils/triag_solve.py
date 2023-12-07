@@ -14,6 +14,12 @@ def matrix_vector_product(A, B, C, X):
     return A * X + B_Y + C_Y
 
 
+def matrix_vector_product_T(A, B, C, X):
+    B_Y = torch.nn.functional.pad(B * X[:, :, :, 1:], (0, 1))
+    C_Y = torch.nn.functional.pad(C * X[:, :, 1:, :], (0, 0, 0, 1))
+    return A * X + B_Y + C_Y
+
+
 def forward_substitution(A, B, C, X):
     """
     Solves J*y=x where J is lower triangular matrix, represented by A: K x L x M x N (center pixels), B: K x L x M x N-1
