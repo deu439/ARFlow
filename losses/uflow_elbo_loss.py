@@ -161,16 +161,29 @@ class UFlowElboLoss(nn.modules.Module):
 
         # Calculate border and occlusion masks #
         ########################################
-        valid_mask1 = mask_invalid(warp12_0)
-        occu_mask1 = torch.clamp(compute_range_map(flow21_0), min=0., max=1.)
-        mask1 = torch.detach(occu_mask1 * valid_mask1)
-        if self.cfg.with_bk:
-            valid_mask2 = mask_invalid(warp21_0)
-            occu_mask2 = torch.clamp(compute_range_map(flow12_0), min=0., max=1.)
-            mask2 = torch.detach(occu_mask2 * valid_mask2)
-        #mask1 = mask_invalid(warp12_0)
-        #if self.cfg.with_bk:
-        #    mask2 = mask_invalid(warp21_0)
+        if self.cfg.occu_mean:
+            mean12_1 = upsample(mean12_2, is_flow=True, align_corners=self.cfg.align_corners)
+            mean12_0 = upsample(mean12_1, is_flow=True, align_corners=self.cfg.align_corners)
+            mean21_1 = upsample(mean21_2, is_flow=True, align_corners=self.cfg.align_corners)
+            mean21_0 = upsample(mean21_1, is_flow=True, align_corners=self.cfg.align_corners)
+
+            mean_warp12_0 = flow_to_warp(mean12_0)
+            valid_mask1 = mask_invalid(mean_warp12_0)
+            occu_mask1 = torch.clamp(compute_range_map(mean21_0), min=0., max=1.)
+            mask1 = torch.detach(occu_mask1 * valid_mask1)
+            if self.cfg.with_bk:
+                mean_warp21_0 = flow_to_warp(mean21_0)
+                valid_mask2 = mask_invalid(mean_warp21_0)
+                occu_mask2 = torch.clamp(compute_range_map(mean12_0), min=0., max=1.)
+                mask2 = torch.detach(occu_mask2 * valid_mask2)
+        else:
+            valid_mask1 = mask_invalid(warp12_0)
+            occu_mask1 = torch.clamp(compute_range_map(flow21_0), min=0., max=1.)
+            mask1 = torch.detach(occu_mask1 * valid_mask1)
+            if self.cfg.with_bk:
+                valid_mask2 = mask_invalid(warp21_0)
+                occu_mask2 = torch.clamp(compute_range_map(flow12_0), min=0., max=1.)
+                mask2 = torch.detach(occu_mask2 * valid_mask2)
 
         # Calculate photometric loss on level 0 #
         ############################################################
