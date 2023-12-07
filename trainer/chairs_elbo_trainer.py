@@ -101,7 +101,7 @@ class TrainFramework(BaseTrainer):
 
         n_step = 0
         for i_set, loader in enumerate(self.valid_loader):
-            error_names = ['EPE', 'AUC', 'AUC_diff']
+            error_names = ['EPE', 'AUC', 'AUC_diff', 'Loss', 'l_ph', 'l_sm', 'entropy', 'inv_l1norm']
             error_meters = AverageMeter(i=len(error_names))
             splots = []
             oplots = []
@@ -112,18 +112,27 @@ class TrainFramework(BaseTrainer):
                 gt_flows = data['target']['flow'].numpy().transpose([0, 2, 3, 1])
 
                 # compute output
-                flows = self.model(img_pair)['flows_fw']
+                res_dict = self.model(img_pair)
+
+                # Evaluate loss
+                flows_12, flows_21 = res_dict['flows_fw'], res_dict['flows_bw']
+                flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
+                         zip(flows_12, flows_21)]
+                loss, l_ph, l_sm, entropy, inv_l1norm = self.loss_func(flows, img_pair)
+
+                # Evaluate endpoint error
+                flows = res_dict['flows_fw']
                 pred_flows = flows[0][:, 0:2].detach().cpu().numpy().transpose([0, 2, 3, 1])
                 es = evaluate_flow(gt_flows, pred_flows)
 
-                if flows[0].size(1) == 4:
-                    pred_logvars = flows[0][:, 2:4].detach().cpu().numpy().transpose([0, 2, 3, 1])
-                    auc, splot, oplot = evaluate_uncertainty(gt_flows, pred_flows, pred_logvars, sp_samples=self.cfg.sp_samples)
-                    error_meters.update(es + auc, img_pair.size(0))
-                    splots += splot
-                    oplots += oplot
-                else:
-                    error_meters.update(es + [0, 0], img_pair.size(0))
+                # Evaluate AUC
+                pred_logvars = flows[0][:, 2:4].detach().cpu().numpy().transpose([0, 2, 3, 1])
+                auc, splot, oplot = evaluate_uncertainty(gt_flows, pred_flows, pred_logvars, sp_samples=self.cfg.sp_samples)
+                splots += splot
+                oplots += oplot
+
+                # Update error meters
+                error_meters.update(es + auc + [loss, l_ph, l_sm, entropy, inv_l1norm], img_pair.size(0))
 
                 # measure elapsed time
                 batch_time.update(time.time() - end)
