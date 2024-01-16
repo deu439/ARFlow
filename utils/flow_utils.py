@@ -229,6 +229,7 @@ def sp_plot(error, entropy, n=25, alpha=100.0, eps=1e-1):
 def evaluate_uncertainty(gt_flows, pred_flows, pred_logvars, sp_samples=25):
     sauc, oauc = 0, 0
     splots, oplots = [], []
+    B = len(gt_flows)
     for gt_flow, pred_flow, pred_logvar, i in zip(gt_flows, pred_flows, pred_logvars, range(B)):
         H, W = gt_flow.shape[:2]
 
@@ -264,5 +265,5 @@ def evaluate_uncertainty(gt_flows, pred_flows, pred_logvars, sp_samples=25):
         sauc += np.trapz(splot / splot[0], x=frac)
         oauc += np.trapz(oplot / oplot[0], x=frac)
 
-    return [sauc, sauc - oauc], splots, oplots
+    return [sauc / B, (sauc - oauc) / B], splots, oplots
 
