@@ -59,7 +59,7 @@ class BaseTrainer:
         if self.cfg.pretrained_model:
             self._log.info("=> using pre-trained weights {}.".format(
                 self.cfg.pretrained_model))
-            epoch, weights = load_checkpoint(self.cfg.pretrained_model)
+            epoch, weights = load_checkpoint(self.cfg.pretrained_model, self.device)
 
             from collections import OrderedDict
             new_weights = OrderedDict()

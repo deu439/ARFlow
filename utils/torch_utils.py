@@ -24,8 +24,8 @@ def bias_parameters(module):
     return [param for name, param in module.named_parameters() if 'bias' in name]
 
 
-def load_checkpoint(model_path):
-    weights = torch.load(model_path)
+def load_checkpoint(model_path, device):
+    weights = torch.load(model_path, map_location=device)
     epoch = None
     if 'epoch' in weights:
         epoch = weights.pop('epoch')
@@ -51,8 +51,8 @@ def save_checkpoint(save_path, states, file_prefixes, is_best, filename='ckpt.pt
         run_one_sample(save_path, states, file_prefixes, is_best, filename)
 
 
-def restore_model(model, pretrained_file):
-    epoch, weights = load_checkpoint(pretrained_file)
+def restore_model(model, pretrained_file, device='cuda'):
+    epoch, weights = load_checkpoint(pretrained_file, device)
 
     model_keys = set(model.state_dict().keys())
     weight_keys = set(weights.keys())
