@@ -13,28 +13,22 @@ def main(cfg, _log):
     _log.info("=> fetching img pairs.")
     train_set, valid_set = get_dataset(cfg)
 
+    valid_len = sum([len(s) for s in valid_set])
     _log.info('{} samples found, {} train samples and {} test samples '.format(
-        len(valid_set) + len(train_set),
+        valid_len + len(train_set),
         len(train_set),
-        len(valid_set)))
+        valid_len))
 
     train_loader = torch.utils.data.DataLoader(
         train_set, batch_size=cfg.train.batch_size,
         num_workers=cfg.train.workers, pin_memory=True, shuffle=True)
 
     max_test_batch = 4
-    if type(valid_set) is torch.utils.data.ConcatDataset:
-        valid_loader = [torch.utils.data.DataLoader(
-            s, batch_size=min(max_test_batch, cfg.train.batch_size),
-            num_workers=min(4, cfg.train.workers),
-            pin_memory=True, shuffle=False) for s in valid_set.datasets]
-        valid_size = sum([len(l) for l in valid_loader])
-    else:
-        valid_loader = torch.utils.data.DataLoader(
-            valid_set, batch_size=min(max_test_batch, cfg.train.batch_size),
-            num_workers=min(4, cfg.train.workers),
-            pin_memory=True, shuffle=False)
-        valid_size = len(valid_loader)
+    valid_loader = [torch.utils.data.DataLoader(
+        s, batch_size=min(max_test_batch, cfg.train.batch_size),
+        num_workers=min(4, cfg.train.workers),
+        pin_memory=True, shuffle=False) for s in valid_set]
+    valid_size = sum([len(l) for l in valid_loader])
 
     if cfg.train.epoch_size == 0:
         cfg.train.epoch_size = len(train_loader)
