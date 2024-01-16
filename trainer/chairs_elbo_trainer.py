@@ -17,7 +17,7 @@ class TrainFramework(BaseTrainer):
         am_batch_time = AverageMeter()
         am_data_time = AverageMeter()
 
-        key_meter_names = ['Loss', 'l_ph', 'l_sm', 'entropy', 'inv_l1norm']
+        key_meter_names = ['Loss', 'l_ph', 'l_sm', 'entropy', 'off_diag']
         key_meters = AverageMeter(i=len(key_meter_names), precision=4)
 
         self.model.train()
@@ -111,7 +111,7 @@ class TrainFramework(BaseTrainer):
                 img_pair = torch.cat([img1, img2], 1).to(self.device)
                 gt_flows = data['target']['flow'].numpy().transpose([0, 2, 3, 1])
 
-                # compute output
+                # Compute output
                 res_dict = self.model(img_pair)
 
                 # Evaluate loss
@@ -119,20 +119,24 @@ class TrainFramework(BaseTrainer):
                 flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
                          zip(flows_12, flows_21)]
                 loss, l_ph, l_sm, entropy, inv_l1norm = self.loss_func(flows, img_pair)
+                error_values = [loss, l_ph, l_sm, entropy, inv_l1norm]
 
                 # Evaluate endpoint error
                 flows = res_dict['flows_fw']
                 pred_flows = flows[0][:, 0:2].detach().cpu().numpy().transpose([0, 2, 3, 1])
                 es = evaluate_flow(gt_flows, pred_flows)
+                error_values += es
 
                 # Evaluate AUC
-                pred_logvars = flows[0][:, 2:4].detach().cpu().numpy().transpose([0, 2, 3, 1])
-                auc, splot, oplot = evaluate_uncertainty(gt_flows, pred_flows, pred_logvars, sp_samples=self.cfg.sp_samples)
-                splots += splot
-                oplots += oplot
+                if not self.loss_func.cfg.inv_cov:
+                    pred_logvars = flows[0][:, 2:4].detach().cpu().numpy().transpose([0, 2, 3, 1])
+                    auc, splot, oplot = evaluate_uncertainty(gt_flows, pred_flows, pred_logvars, sp_samples=self.cfg.sp_samples)
+                    splots += splot
+                    oplots += oplot
+                    error_values += auc
 
                 # Update error meters
-                error_meters.update(es + auc + [loss, l_ph, l_sm, entropy, inv_l1norm], img_pair.size(0))
+                error_meters.update(error_values, img_pair.size(0))
 
                 # measure elapsed time
                 batch_time.update(time.time() - end)
@@ -158,13 +162,13 @@ class TrainFramework(BaseTrainer):
             # write predicted and true flow to tboard
             gt_flow = data['target']['flow']
             image = torch_flow2rgb(gt_flow.cpu())
-            self.summary_writer.add_images("Valid/gt", image, self.i_epoch)
+            self.summary_writer.add_images("Valid/gt_{}".format(i_set), image, self.i_epoch)
             image = torch_flow2rgb(flows[0][:, 0:2].cpu())
-            self.summary_writer.add_images("Valid/pred", image, self.i_epoch)
+            self.summary_writer.add_images("Valid/pred_{}".format(i_set), image, self.i_epoch)
             entropy = torch.sum(flows[0][:, 2:4], axis=1, keepdim=True)
             entropy -= torch.min(entropy)
             entropy /= torch.max(entropy)
-            self.summary_writer.add_images("Valid/entropy", entropy.cpu(), self.i_epoch, dataformats='NCHW')
+            self.summary_writer.add_images("Valid/entropy_{}".format(i_set), entropy.cpu(), self.i_epoch, dataformats='NCHW')
 
             # write sparsification plots to tboard
             if len(splots) > 0 and len(oplots) > 0:
@@ -176,7 +180,7 @@ class TrainFramework(BaseTrainer):
                 ax.plot(x_axis, y_axis2)
                 ax.legend(['splot', 'oracle'])
                 np_fig = matplot_fig_to_numpy(fig)
-                self.summary_writer.add_image(f"Valid/splot", np_fig, self.i_epoch, dataformats="HWC")
+                self.summary_writer.add_image("Valid/splot_{}".format(i_set), np_fig, self.i_epoch, dataformats="HWC")
 
             all_error_avgs.extend(error_meters.avg)
             all_error_names.extend(['{}_{}'.format(name, i_set) for name in error_names])
@@ -185,6 +189,6 @@ class TrainFramework(BaseTrainer):
         # In order to reduce the space occupied during debugging,
         # only the model with more than cfg.save_iter iterations will be saved.
         if self.i_iter > self.cfg.save_iter:
-            self.save_model(all_error_avgs[0], name='Sintel')
+            self.save_model(all_error_avgs[0], name='Chairs')
 
         return all_error_avgs, all_error_names
