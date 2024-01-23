@@ -8,7 +8,7 @@ from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_i
 from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product, matrix_vector_product_T
 
 
-def log_gmm(x, pi, beta):
+def minus_log_gmm(x, pi, beta):
     pi = torch.tensor(pi, device=x.device)
     beta = torch.tensor(beta, device=x.device)
     arg = -beta * torch.square(x).unsqueeze(-1)
@@ -252,7 +252,7 @@ class UFlowElboLoss(nn.modules.Module):
         if self.cfg.penalty_census == "abs_robust_loss":
             penalty_func_census = abs_robust_loss
         elif self.cfg.penalty_census == "gmm":
-            penalty_func_census = lambda x: log_gmm(x, self.cfg.penalty_census_pi, self.cfg.penalty_census_pi)
+            penalty_func_census = lambda x: minus_log_gmm(x, self.cfg.penalty_census_pi, self.cfg.penalty_census_beta)
 
         data_loss12, data_weight12 = self.data_loss_no_penalty(im1_0, im2_0, flow12_2, flow21_2, mean12_2, mean21_2)
         loss_warp = torch.sum(data_weight12 * penalty_func_census(data_loss12))
@@ -266,7 +266,7 @@ class UFlowElboLoss(nn.modules.Module):
         if self.cfg.penalty_smooth == "robust_l1":
             penalty_func_smooth = robust_l1
         elif self.cfg.penalty_smooth == "gmm":
-            penalty_func_smooth = lambda x: log_gmm(x, self.cfg.penalty_smooth_pi, self.cfg.penalty_smooth_pi)
+            penalty_func_smooth = lambda x: minus_log_gmm(x, self.cfg.penalty_smooth_pi, self.cfg.penalty_smooth_beta)
 
         smooth_loss12_x, smooth_weight12_x, smooth_loss12_y, smooth_weight12_y = self.smooth_loss_no_penalty(im1_0, flow12_2)
         # In contrast to data loss, the smoothness loss is AVERAGED over pixels (comes from the UFlow code)
