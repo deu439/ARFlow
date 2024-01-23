@@ -62,9 +62,9 @@ def get_dataset(all_cfg):
         elif cfg.type == 'Chairs':
             ap_transform = get_ap_transforms(cfg.at_cfg) if cfg.run_at else None
 
-            train_set_1 = Chairs(cfg.root_chairs,  n_frames=cfg.train_n_frames, split='training', with_flow=False,
-                               ap_transform=ap_transform, transform=input_transform, co_transform=co_transform)
-                               #target_transform={'flow': sep_transforms.ArrayToTensor()})
+            train_set_1 = Chairs(cfg.root_chairs,  n_frames=cfg.train_n_frames, split='training', with_flow=True,
+                               ap_transform=ap_transform, transform=input_transform, co_transform=co_transform,
+                               target_transform={'flow': sep_transforms.ArrayToTensor(), 'flow_bw': sep_transforms.ArrayToTensor()})
             train_set += [train_set_1]
 
             valid_input_transform = copy.deepcopy(input_transform)
