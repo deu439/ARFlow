@@ -2,8 +2,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_invalid, census_loss, image_grads, robust_l1, upsample
+import math
+
+from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_invalid, census_loss_no_penalty, image_grads, robust_l1, abs_robust_loss, upsample
 from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product, matrix_vector_product_T
+
+
+def log_gmm(x, pi, beta):
+    pi = torch.tensor(pi, device=x.device)
+    beta = torch.tensor(beta, device=x.device)
+    arg = -beta * torch.square(x).unsqueeze(-1)
+    w = pi * torch.sqrt(beta) / math.sqrt(2 * torch.pi)
+    return -torch.log(torch.sum(w * torch.exp(arg/2), dim=-1))
 
 
 class UFlowElboLoss(nn.modules.Module):
@@ -12,8 +22,9 @@ class UFlowElboLoss(nn.modules.Module):
         self.cfg = cfg
 
         self.Normal = torch.distributions.Normal(0, 1)
-        self.Normal.loc = self.Normal.loc.cuda() # hack to get sampling on the GPU
-        self.Normal.scale = self.Normal.scale.cuda()
+        if torch.cuda.is_available():
+            self.Normal.loc = self.Normal.loc.cuda() # hack to get sampling on the GPU
+            self.Normal.scale = self.Normal.scale.cuda()
 
     def reparam_diag(self, mean, log_diag, nsamples=1):
         """
@@ -56,6 +67,73 @@ class UFlowElboLoss(nn.modules.Module):
         eps = self.Normal.sample(mean.size())
         z = mean + BackwardSubst.apply(diag, left, over, eps)
         return z
+
+    def data_loss_no_penalty(self, im1_0, im2_0, flow12_2, flow21_2, mean12_2=None, mean21_2=None):
+        """
+        Computes the per-pixel data loss and weight map before applying penalty functions
+        :param: im1_0: (batch, channels, height, width) tensor representing the first image at original resolution (level 0)
+        :param: im2_0: (batch, channels, height, width) tensor representing the second mage at original resolution (level 0)
+        :param: flow12_2: (batch*n_samples, 2, height, width) tensor representing the forward flow at 1/4 resolution (level 2)
+        :param: flow21_2: (batch*n_samples, 2, height, width) tensor representing the backward flow at 1/4 resolution (level 2)
+        :param: mean12_2: (batch, 2, height, width) tensor representing the forward flow at 1/4 resolution (level 2)
+        :param: mean21_2: (batch, 2, height, width) tensor representing the backward flow at 1/4 resolution (level 2)
+        :return: loss12: (batch, 1, height, width) forward loss,
+                 weight12: (batch, 1, height, width) forward weight,
+        """
+
+        # Upsample flow 4x #
+        ####################
+        flow12_1 = upsample(flow12_2, is_flow=True, align_corners=self.cfg.align_corners)
+        flow12_0 = upsample(flow12_1, is_flow=True, align_corners=self.cfg.align_corners)
+        flow21_1 = upsample(flow21_2, is_flow=True, align_corners=self.cfg.align_corners)
+        flow21_0 = upsample(flow21_1, is_flow=True, align_corners=self.cfg.align_corners)
+
+        # Warp the images #
+        ###################
+        warp12_0 = flow_to_warp(flow12_0)
+        im1_recons = resample2(im2_0.detach(), warp12_0)
+
+        # Calculate border and occlusion masks #
+        ########################################
+        if self.cfg.occu_mean:
+            mean12_1 = upsample(mean12_2, is_flow=True, align_corners=self.cfg.align_corners)
+            mean12_0 = upsample(mean12_1, is_flow=True, align_corners=self.cfg.align_corners)
+            mean21_1 = upsample(mean21_2, is_flow=True, align_corners=self.cfg.align_corners)
+            mean21_0 = upsample(mean21_1, is_flow=True, align_corners=self.cfg.align_corners)
+
+            mean_warp12_0 = flow_to_warp(mean12_0)
+            valid_mask1 = mask_invalid(mean_warp12_0)
+            occu_mask1 = torch.clamp(compute_range_map(mean21_0), min=0., max=1.)
+            mask1 = torch.detach(occu_mask1 * valid_mask1)
+
+        else:
+            valid_mask1 = mask_invalid(warp12_0)
+            occu_mask1 = torch.clamp(compute_range_map(flow21_0), min=0., max=1.)
+            mask1 = torch.detach(occu_mask1 * valid_mask1)
+
+        # Calculate photometric loss on level 0 #
+        #########################################
+        loss12, weight12 = census_loss_no_penalty(im1_0, im1_recons, mask1)
+
+        return loss12, self.cfg.w_census * weight12
+
+    def smooth_loss_no_penalty(self, im1_0, flow12_2):
+        # Calculate smoothness loss on level 2 #
+        ############################################################
+        _, _, height, width = im1_0.size()
+        im1_1 = F.interpolate(im1_0, scale_factor=0.5, mode='bilinear', align_corners=self.cfg.align_corners)
+        im1_2 = F.interpolate(im1_1, scale_factor=0.5, mode='bilinear', align_corners=self.cfg.align_corners)
+
+        # Forward -----------
+        im1_gx, im1_gy = image_grads(im1_2.detach())
+        weights1_x = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im1_gx), 1, keepdim=True))
+        weights1_y = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im1_gy), 1, keepdim=True))
+
+        flow12_x, flow12_y = image_grads(flow12_2)
+        weight12_x = self.cfg.w_smooth * weights1_x / 2.
+        weight12_y = self.cfg.w_smooth * weights1_y / 2.
+
+        return flow12_x, weight12_x, flow12_y, weight12_y
 
     def forward(self, output, target):
         """
@@ -101,6 +179,14 @@ class UFlowElboLoss(nn.modules.Module):
         im1_0 = target[:, :3]
         im2_0 = target[:, 3:]
 
+        # Regularization of the off-diagonal entries #
+        ##############################################
+        loss_offdiag = 0
+        if not self.cfg.diag:
+            loss_offdiag = (torch.mean(torch.square(left12_2)) + torch.mean(torch.square(over12_2))) / 2.0
+            if self.cfg.with_bk:
+                loss_offdiag += (torch.mean(torch.square(left21_2)) + torch.mean(torch.square(over21_2))) / 2.0
+
         # Calculate l1 norm of the precision matrix inverse #
         #####################################################
         K, L = mean12_2.shape[0:2]
@@ -125,8 +211,6 @@ class UFlowElboLoss(nn.modules.Module):
         elif not self.cfg.diag and self.cfg.inv_cov:
             flow12_2 = self.reparam_triag_inv(mean12_2, diag12_2, left12_2, over12_2)
             flow21_2 = self.reparam_triag_inv(mean21_2, diag21_2, left21_2, over21_2)
-
-        inv_l1norm = max(torch.max(flow12_2), torch.max(flow21_2))
 
         # Calculate entropy loss #
         ##########################
@@ -163,89 +247,41 @@ class UFlowElboLoss(nn.modules.Module):
                 if self.cfg.with_bk:
                     loss_entropy -= self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
 
-        # Upsample flow 4x
-        flow12_1 = upsample(flow12_2, is_flow=True, align_corners=self.cfg.align_corners)
-        flow12_0 = upsample(flow12_1, is_flow=True, align_corners=self.cfg.align_corners)
-        flow21_1 = upsample(flow21_2, is_flow=True, align_corners=self.cfg.align_corners)
-        flow21_0 = upsample(flow21_1, is_flow=True, align_corners=self.cfg.align_corners)
+        # Data loss on level 0 #
+        ########################
+        if self.cfg.penalty_census == "abs_robust_loss":
+            penalty_func_census = abs_robust_loss
+        elif self.cfg.penalty_census == "gmm":
+            penalty_func_census = lambda x: log_gmm(x, self.cfg.penalty_census_pi, self.cfg.penalty_census_pi)
 
-        # Warp the images #
-        ###################
-        warp12_0 = flow_to_warp(flow12_0)
-        im1_recons = resample2(im2_0.detach(), warp12_0)
+        data_loss12, data_weight12 = self.data_loss_no_penalty(im1_0, im2_0, flow12_2, flow21_2, mean12_2, mean21_2)
+        loss_warp = torch.sum(data_weight12 * penalty_func_census(data_loss12))
         if self.cfg.with_bk:
-            warp21_0 = flow_to_warp(flow21_0)
-            im2_recons = resample2(im1_0.detach(), warp21_0)
+            # Here the arguments are passed in reversed order!
+            data_loss21, data_weight21 = self.data_loss_no_penalty(im2_0, im1_0, flow21_2, flow12_2, mean21_2, mean12_2)
+            loss_warp += torch.sum(data_weight21 * penalty_func_census(data_loss21))
 
-        # Calculate border and occlusion masks #
-        ########################################
-        if self.cfg.occu_mean:
-            mean12_1 = upsample(mean12_2, is_flow=True, align_corners=self.cfg.align_corners)
-            mean12_0 = upsample(mean12_1, is_flow=True, align_corners=self.cfg.align_corners)
-            mean21_1 = upsample(mean21_2, is_flow=True, align_corners=self.cfg.align_corners)
-            mean21_0 = upsample(mean21_1, is_flow=True, align_corners=self.cfg.align_corners)
+        # Smoothness loss on level 2 #
+        ##############################
+        if self.cfg.penalty_smooth == "robust_l1":
+            penalty_func_smooth = robust_l1
+        elif self.cfg.penalty_smooth == "gmm":
+            penalty_func_smooth = lambda x: log_gmm(x, self.cfg.penalty_smooth_pi, self.cfg.penalty_smooth_pi)
 
-            mean_warp12_0 = flow_to_warp(mean12_0)
-            valid_mask1 = mask_invalid(mean_warp12_0)
-            occu_mask1 = torch.clamp(compute_range_map(mean21_0), min=0., max=1.)
-            mask1 = torch.detach(occu_mask1 * valid_mask1)
-            if self.cfg.with_bk:
-                mean_warp21_0 = flow_to_warp(mean21_0)
-                valid_mask2 = mask_invalid(mean_warp21_0)
-                occu_mask2 = torch.clamp(compute_range_map(mean12_0), min=0., max=1.)
-                mask2 = torch.detach(occu_mask2 * valid_mask2)
-        else:
-            valid_mask1 = mask_invalid(warp12_0)
-            occu_mask1 = torch.clamp(compute_range_map(flow21_0), min=0., max=1.)
-            mask1 = torch.detach(occu_mask1 * valid_mask1)
-            if self.cfg.with_bk:
-                valid_mask2 = mask_invalid(warp21_0)
-                occu_mask2 = torch.clamp(compute_range_map(flow12_0), min=0., max=1.)
-                mask2 = torch.detach(occu_mask2 * valid_mask2)
-
-        # Calculate photometric loss on level 0 #
-        ############################################################
-        loss_warp = self.cfg.w_census * census_loss(im1_0, im1_recons, mask1)
+        smooth_loss12_x, smooth_weight12_x, smooth_loss12_y, smooth_weight12_y = self.smooth_loss_no_penalty(im1_0, flow12_2)
+        # In contrast to data loss, the smoothness loss is AVERAGED over pixels (comes from the UFlow code)
+        loss_smooth = torch.mean(smooth_weight12_x * penalty_func_smooth(smooth_loss12_x)) \
+                      + torch.mean(smooth_weight12_y * penalty_func_smooth(smooth_loss12_y))
         if self.cfg.with_bk:
-            loss_warp += self.cfg.w_census * census_loss(im2_0, im2_recons, mask2)
-
-        # Calculate smoothness loss on level 2 #
-        ############################################################
-        if self.cfg.edge_penalty == 'abs':
-            edge_penalty = torch.abs
-        elif self.cfg.edge_penalty == 'charbonnier':
-            edge_penalty = lambda x: torch.sqrt(torch.square(x) + 1e-5)
-        elif self.cfg.edge_penalty == "square":
-            edge_penalty = torch.square
-        else:
-            raise ValueError("Unknown edge penalty function {}".format(self.cfg.edge_penalty))
-
-        _, _, height, width = im1_0.size()
-        im1_1 = F.interpolate(im1_0, scale_factor=0.5, mode='bilinear', align_corners=self.cfg.align_corners)
-        im1_2 = F.interpolate(im1_1, scale_factor=0.5, mode='bilinear', align_corners=self.cfg.align_corners)
-        im2_1 = F.interpolate(im2_0, scale_factor=0.5, mode='bilinear', align_corners=self.cfg.align_corners)
-        im2_2 = F.interpolate(im2_1, scale_factor=0.5, mode='bilinear', align_corners=self.cfg.align_corners)
-
-        # Forward -----------
-        im1_gx, im1_gy = image_grads(im1_2.detach())
-        weights1_x = torch.exp(-torch.mean(edge_penalty(self.cfg.edge_constant * im1_gx), 1, keepdim=True))
-        weights1_y = torch.exp(-torch.mean(edge_penalty(self.cfg.edge_constant * im1_gy), 1, keepdim=True))
-
-        flow12_gx, flow12_gy = image_grads(flow12_2)
-        loss_smooth = self.cfg.w_smooth * (torch.mean(weights1_x * robust_l1(flow12_gx))
-                                           + torch.mean(weights1_y * robust_l1(flow12_gy))) / 2.
-        if self.cfg.with_bk:
-            # Backward -----------
-            im2_gx, im2_gy = image_grads(im2_2.detach())
-            weights2_x = torch.exp(-torch.mean(edge_penalty(self.cfg.edge_constant * im2_gx), 1, keepdim=True))
-            weights2_y = torch.exp(-torch.mean(edge_penalty(self.cfg.edge_constant * im2_gy), 1, keepdim=True))
-
-            flow21_gx, flow21_gy = image_grads(flow21_2)
-            loss_smooth += self.cfg.w_smooth * (torch.mean(weights2_x * robust_l1(flow21_gx))
-                                               + torch.mean(weights2_y * robust_l1(flow21_gy))) / 2.
+            # Here the arguments are passed in reversed order!
+            smooth_loss21_x, smooth_weight21_x, smooth_loss21_y, smooth_weight21_y = self.smooth_loss_no_penalty(im2_0, flow21_2)
+            loss_smooth += torch.mean(smooth_weight21_x * penalty_func_smooth(smooth_loss21_x)) \
+                          + torch.mean(smooth_weight21_y * penalty_func_smooth(smooth_loss21_y))
 
         # Calculate total loss #
         ########################
         total_loss = loss_warp + loss_smooth - loss_entropy
+        if not self.cfg.diag:
+            total_loss += self.cfg.offdiag_reg*loss_offdiag
 
-        return total_loss, loss_warp, loss_smooth, loss_entropy, inv_l1norm
+        return total_loss, loss_warp, loss_smooth, loss_entropy, loss_offdiag

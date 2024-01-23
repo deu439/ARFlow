@@ -211,6 +211,27 @@ def upsample(img, is_flow, scale_factor=2.0, align_corners=False):
     return img_resized
 
 
+def downsample(img, is_flow, scale_factor=2.0, align_corners=False):
+    """Double resolution of an image or flow field.
+
+    Args:
+      img: [BCHW], image or flow field to be resized
+      is_flow: bool, flag for scaling flow accordingly
+
+    Returns:
+      Resized and potentially scaled image or flow field.
+    """
+
+    img_resized = nn.functional.interpolate(img, scale_factor=1/scale_factor, mode='bilinear',
+                                            align_corners=align_corners)
+
+    if is_flow:
+        # Scale flow values to be consistent with the new image size.
+        img_resized *= 1/scale_factor
+
+    return img_resized
+
+
 def image_grads(image_batch, stride=1):
     image_batch_gh = image_batch[:, :, stride:] - image_batch[:, :, :-stride]
     image_batch_gw = image_batch[:, :, :, stride:] - image_batch[:, :, :, :-stride]
@@ -303,3 +324,16 @@ def census_loss(image_a, image_b, mask, patch_size=7):
     diff = abs_robust_loss(hamming)
     diff *= padded_mask
     return torch.sum(diff) / (torch.sum(padded_mask.detach()) + 1e-6)
+
+
+def census_loss_no_penalty(image_a, image_b, mask, patch_size=7):
+    """Compares the similarity of the census transform of two images."""
+    census_image_a = census_transform(image_a, patch_size)
+    census_image_b = census_transform(image_b, patch_size)
+
+    hamming = soft_hamming(census_image_a, census_image_b)
+
+    # Set borders of mask to zero to ignore edge effects.
+    padded_mask = zero_mask_border(mask, patch_size)
+
+    return hamming, padded_mask / (torch.sum(padded_mask.detach()) + 1e-6)
