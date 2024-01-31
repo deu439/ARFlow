@@ -151,8 +151,8 @@ def marginal_variances(A, B, C):
             X = torch.zeros_like(A)
             X[:,:,i,j] = 1
             # Solve the system
-            #Y = triag_solve_cuda.forward_substitution(A, B, C, X)
-            Y = forward_substitution(A, B, C, X)
+            Y = triag_solve_cuda.forward_substitution(A, B, C, X)
+            #Y = forward_substitution(A, B, C, X)
             H[:,:,i,j] = torch.sum(Y*Y, dim=(2, 3))
 
     return H
@@ -205,7 +205,7 @@ def marginal_variances_fast(A, B, C):
     return H
 
 
-def inverse_l1norm(A, B, C):
+def inverse_l1norm(A, B, C, n_iter=100):
     """
     Computes an approximation to ||L^{-1}||_1 using Algorithm 5.1 of [1].
 
@@ -219,18 +219,18 @@ def inverse_l1norm(A, B, C):
     B = B.view(1,1,M,N-1).contiguous()
     C = C.view(1,1,M-1,N).contiguous()
 
-    for n in range(100):    # Do not run forever
+    for n in range(n_iter):    # Do not run forever
         # Solve A*y = x
-        Y = forward_substitution(A, B, C, X.view(1,1,M,N)).squeeze()
-        #Y = triag_solve_cuda.forward_substitution(A, B, C, X.view(1,1,M,N).contiguous()).squeeze()
+        #Y = forward_substitution(A, B, C, X.view(1,1,M,N)).squeeze()
+        Y = triag_solve_cuda.forward_substitution(A, B, C, X.view(1,1,M,N).contiguous()).squeeze()
 
         # Form xi
         Xi = torch.ones_like(Y)
         Xi[Y < 0] = -1
 
         # Solve A^T*z = xi
-        Z = backward_substitution(A, B, C, Xi.view(1,1,M,N)).squeeze()
-        #Z = triag_solve_cuda.backward_substitution(A, B, C, Xi.view(1,1,M,N).contiguous()).squeeze()
+        #Z = backward_substitution(A, B, C, Xi.view(1,1,M,N)).squeeze()
+        Z = triag_solve_cuda.backward_substitution(A, B, C, Xi.view(1,1,M,N).contiguous()).squeeze()
 
         # If ||z||_inf <= z^T*x
         absZ = torch.abs(Z)
@@ -257,6 +257,7 @@ def inverse_l1norm_exact(A, B, C):
     J_mat = A_mat + B_mat + C_mat
     S_mat = np.linalg.inv(J_mat)
     return np.linalg.norm(J_mat) * np.linalg.norm(S_mat, ord=1)
+
 
 def trans_inverse_l1norm_exact(A, B, C):
     M, N = A.shape
@@ -318,9 +319,9 @@ class NaturalGradientIdentity(Function):
 
 
 def check_gradient():
-    M = 15   # Rows
-    N = 15   # Cols
-    A = 20*torch.ones((2, 2, M, N), requires_grad=True, dtype=torch.double)
+    M = 5   # Rows
+    N = 5   # Cols
+    A = 2*torch.ones((2, 2, M, N), requires_grad=True, dtype=torch.double)
     B = torch.randn(2, 2, M, N-1, requires_grad=True, dtype=torch.double) # left
     C = torch.randn(2, 2, M-1, N, requires_grad=True, dtype=torch.double) # up
     X = torch.randn(2, 2, M, N, requires_grad=True, dtype=torch.double)
@@ -335,29 +336,28 @@ def check_gradient():
 
 
 def check_solver():
-    M = 50  # Rows
-    N = 50  # Cols
-    A = 10*torch.ones((1, 1, M, N))
-    B = torch.randn(1, 1, M, N - 1)  # left
-    C = torch.randn(1, 1, M - 1, N)  # up
-    X = torch.randn(1, 1, M, N)
+    M = 5 # Rows
+    N = 6  # Cols
+    A = 2*torch.ones((1, 1, M, N), dtype=torch.double)
+    B = torch.randn(1, 1, M, N - 1, dtype=torch.double)  # left
+    C = torch.randn(1, 1, M - 1, N, dtype=torch.double)  # up
+    X = torch.randn(1, 1, M, N, dtype=torch.double)
 
     # Solve using numpy
-    t = time.process_time()
-    Yn = forward_substitution_npsolve(A.squeeze().numpy(), B.squeeze().numpy(), C.squeeze().numpy(), X.squeeze().numpy())
-    print("Runtime numpy: ", time.process_time() - t, "s")
-    print(Yn)
+    #t = time.process_time()
+    Yn = backward_substitution_npsolve(A.squeeze().numpy(), B.squeeze().numpy(), C.squeeze().numpy(), X.squeeze().numpy())
+    #print("Runtime numpy: ", time.process_time() - t, "s")
+    res = matrix_vector_product_T(A, B, C, torch.tensor(Yn).view(1, 1, M, N)) - X
+    print("Residual Numpy: ", torch.sum(torch.abs(res)) / torch.sum(torch.abs(X)))
 
-    # Solve in python
+    # Solve using backward_substitution
     t = time.process_time()
-    Yp = forward_substitution(A, B, C, X)
+    Yp = backward_substitution(A, B, C, X)
     #torch.cuda.synchronize()
-    print("Runtime python:", time.process_time() - t, "s")
-    print(Yp)
-    print("Python max err:", np.max(np.abs(Yn - Yp.squeeze().numpy())))
+    #print("Runtime python:", time.process_time() - t, "s")
+    #print("Python max err:", np.max(np.abs(Yn - Yp.squeeze().numpy())))
 
-    # Matrix vector product
-    res = matrix_vector_product(A, B, C, Yp) - X
+    res = matrix_vector_product_T(A, B, C, Yp) - X
     print("Residual: ", torch.sum(torch.abs(res)) / torch.sum(torch.abs(X)))
 
     # Solve on GPU

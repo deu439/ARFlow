@@ -101,7 +101,9 @@ class TrainFramework(BaseTrainer):
 
         n_step = 0
         for i_set, loader in enumerate(self.valid_loader):
-            error_names = ['EPE', 'AUC', 'AUC_diff', 'Loss', 'l_ph', 'l_sm', 'entropy', 'inv_l1norm']
+            error_names = ['Loss', 'l_ph', 'l_sm', 'entropy', 'inv_l1norm', 'EPE']
+            if not self.loss_func.cfg.inv_cov:
+                error_names += ['AUC', 'AUC_diff']
             error_meters = AverageMeter(i=len(error_names))
             splots = []
             oplots = []

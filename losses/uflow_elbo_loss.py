@@ -84,10 +84,8 @@ class UFlowElboLoss(nn.modules.Module):
 
         # Upsample flow 4x #
         ####################
-        flow12_1 = upsample(flow12_2, is_flow=True, align_corners=self.cfg.align_corners)
-        flow12_0 = upsample(flow12_1, is_flow=True, align_corners=self.cfg.align_corners)
-        flow21_1 = upsample(flow21_2, is_flow=True, align_corners=self.cfg.align_corners)
-        flow21_0 = upsample(flow21_1, is_flow=True, align_corners=self.cfg.align_corners)
+        flow12_0 = upsample(flow12_2, scale_factor=4, is_flow=True, align_corners=self.cfg.align_corners)
+        flow21_0 = upsample(flow21_2, scale_factor=4, is_flow=True, align_corners=self.cfg.align_corners)
 
         # Warp the images #
         ###################
@@ -97,10 +95,8 @@ class UFlowElboLoss(nn.modules.Module):
         # Calculate border and occlusion masks #
         ########################################
         if self.cfg.occu_mean:
-            mean12_1 = upsample(mean12_2, is_flow=True, align_corners=self.cfg.align_corners)
-            mean12_0 = upsample(mean12_1, is_flow=True, align_corners=self.cfg.align_corners)
-            mean21_1 = upsample(mean21_2, is_flow=True, align_corners=self.cfg.align_corners)
-            mean21_0 = upsample(mean21_1, is_flow=True, align_corners=self.cfg.align_corners)
+            mean12_0 = upsample(mean12_2, scale_factor=4, is_flow=True, align_corners=self.cfg.align_corners)
+            mean21_0 = upsample(mean21_2, scale_factor=4, is_flow=True, align_corners=self.cfg.align_corners)
 
             mean_warp12_0 = flow_to_warp(mean12_0)
             valid_mask1 = mask_invalid(mean_warp12_0)
@@ -166,13 +162,12 @@ class UFlowElboLoss(nn.modules.Module):
             # Ensure that the matrices are diagonally dominant
             diag12_2 = torch.exp(log_diag12_2)
             diag21_2 = torch.exp(log_diag21_2)
-            if self.cfg.diag_dominant:
-                diag12_2 = diag12_2 \
-                           + torch.max(torch.nn.functional.pad(torch.abs(left12_2), (1, 0)),
-                                       torch.nn.functional.pad(torch.abs(over12_2), (0, 0, 1, 0)))
-                diag21_2 = diag21_2 \
-                           + torch.max(torch.nn.functional.pad(torch.abs(left21_2), (1, 0)),
-                                       torch.nn.functional.pad(torch.abs(over21_2), (0, 0, 1, 0)))
+            if self.cfg.diag_dominant is not None:
+                offdiag12 = F.pad(torch.abs(left12_2), (1, 0)) + F.pad(torch.abs(over12_2), (0, 0, 1, 0))
+                diag12_2 = diag12_2 + self.cfg.diag_dominant * offdiag12
+                offdiag21 = F.pad(torch.abs(left21_2), (1, 0)) + F.pad(torch.abs(over21_2), (0, 0, 1, 0))
+                diag21_2 = diag21_2 + self.cfg.diag_dominant * offdiag21
+
                 # Update the log values
                 log_diag12_2 = torch.log(diag12_2)
                 log_diag21_2 = torch.log(diag21_2)
@@ -203,12 +198,12 @@ class UFlowElboLoss(nn.modules.Module):
 
         # Calculate l1 norm of the precision matrix inverse #
         #####################################################
-        K, L = mean12_2.shape[0:2]
-        inv_l1norm = 0.0
+        #K, L = mean12_2.shape[0:2]
+        #inv_l1norm = 0.0
         #for k in range(K):
         #    for l in range(L):
-        #        out12 = inverse_l1norm(diag12_2[k, l], left12_2[k, l], over12_2[k, l]).item()
-        #        out21 = inverse_l1norm(diag21_2[k, l], left21_2[k, l], over21_2[k, l]).item()
+        #        out12 += inverse_l1norm(diag12_2[k, l], left12_2[k, l], over12_2[k, l], n_iter=10).item()
+        #        out21 += inverse_l1norm(diag21_2[k, l], left21_2[k, l], over21_2[k, l], n_iter=10).item()
         #        inv_l1norm = max(inv_l1norm, out12, out21)
 
         # Reparametrization trick #

@@ -9,7 +9,52 @@ from easydict import EasyDict
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import root_scalar
-from scipy.integrate import quad
+
+cfg = {
+    "data": [{
+        "root_chairs": "/home/deu/Datasets/FlyingChairs2/",
+        "run_at": False,
+        "test_shape": [384, 512],
+        "train_n_frames": 2,
+        "type": "Chairs",
+        "val_n_frames": 2,
+        "val_subsplit": "val"
+    }],
+    "data_aug": {
+        "crop": False,
+        "hflip": False,
+        "swap": False
+    },
+
+    "loss": {
+        "edge_constant": 150,
+        "type": "uflow_elbo",
+        "w_smooth": 4.0,
+        "w_census": 1.0,
+        "w_entropy": 0.1,
+        "with_bk": True,
+        "align_corners": False,
+        "diag": False,
+        "diag_dominant": False,
+        "inv_cov": True,
+        "approx_entropy": False,
+        "occu_mean": False,
+        "n_samples": 1,
+        "offdiag_reg": 0.0
+    },
+
+    "train": {
+        "penalty": "data",
+        #"penalty": "smooth",
+        #"init_vars": [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50],
+        "init_vars": [0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50, 100],
+        "subsample": 0.95,
+        "n_samples": 3e6,
+        "batch_size": 4,
+        "workers": 4,
+        "n_iter": 30
+    },
+}
 
 
 def gaussian_mixture(x, pi, mu, beta):
@@ -172,50 +217,6 @@ class EM:
         return self.objective(x)
 
 
-cfg = {
-    "data": [{
-        "root_chairs": "/home/deu/Datasets/FlyingChairs2/",
-        "run_at": False,
-        "test_shape": [384, 512],
-        "train_n_frames": 2,
-        "type": "Chairs",
-        "val_n_frames": 2,
-        "val_subsplit": "val"
-    }],
-    "data_aug": {
-        "crop": False,
-         "hflip": False,
-         "swap": False
-    },
-
-    "loss": {
-        "edge_constant": 150,
-        "type": "uflow_elbo",
-        "w_smooth": 4.0,
-        "w_census": 1.0,
-        "w_entropy": 0.1,
-        "with_bk": True,
-        "align_corners": False,
-        "diag": False,
-        "diag_dominant": False,
-        "inv_cov": True,
-        "approx_entropy": False,
-        "occu_mean": False,
-        "n_samples": 1,
-        "offdiag_reg": 0.0
-    },
-
-    "train": {
-        "penalty": "data",
-        #"penalty": "smooth",
-        "init_vars": [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50],
-        "subsample": 0.95,
-        "n_samples": 3e6,
-        "batch_size": 4,
-        "workers": 4
-    },
-}
-
 if __name__ == "__main__":
     cfg = EasyDict(cfg)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -227,7 +228,6 @@ if __name__ == "__main__":
 
     # Get loss
     loss_funct = get_loss(cfg.loss)
-
 
     # Collect samples
     data_list = []
@@ -273,11 +273,12 @@ if __name__ == "__main__":
         # Subsample
         for loss, weight in zip(loss_list, weight_list):
             weight = weight / torch.max(weight)  # Normalize the weights
-            #binary_mask = weight > 1e-6          # Drop samples with too small weight
-            #binary_mask = binary_mask * (torch.rand_like(weight) > cfg.train.subsample)
-            binary_mask = torch.rand_like(weight) > cfg.train.subsample
+            binary_mask = weight > 1e-6          # Drop samples with too small weight
+            binary_mask = binary_mask * (torch.rand_like(weight) > cfg.train.subsample)
+            #binary_mask = torch.rand_like(weight) > cfg.train.subsample
             x0 = torch.masked_select(loss, binary_mask)
-            x1 = torch.masked_select(weight, binary_mask)
+            #x1 = torch.masked_select(weight, binary_mask)
+            x1 = torch.ones_like(x0)
             x = torch.stack([x0, x1])
             data_list.append(x)
 
@@ -285,7 +286,8 @@ if __name__ == "__main__":
     obj = []
     em = EM(k=10, init_vars=cfg.train.init_vars)
     x = torch.cat(data_list, dim=-1)
-    for j in range(30):
+
+    for j in range(cfg.train.n_iter):
         print("update: ", j)
         obj.append(em.update(x))
 
@@ -300,7 +302,7 @@ if __name__ == "__main__":
     if cfg.train.penalty == 'data':
         reference_penalty = abs_robust_loss
         reference_fwhm = abs_robust_loss_fwhm()
-        x = np.linspace(-40, 40, 8000)
+        x = np.linspace(-30, 30, 8000)
         x_label = "Generalized Hamming distance"
     else:
         reference_penalty = robust_l1
@@ -315,15 +317,24 @@ if __name__ == "__main__":
     print("Scaling factor: ", sol.root)
     print("Beta scaled: ", list(beta * sol.root))
     y = gaussian_mixture(x, pi, mu, beta*sol.root)
+    #y = gaussian_mixture(x, pi, mu, beta)
     yp = reference_penalty(x)
     fig, ax = plt.subplots(1,2)
-    ax[0].plot(x, y)
-    ax[0].plot(x, yp)
+    # pdf
+    ax[0].plot(np.sqrt(sol.root)*x, y)
+    ax[0].plot(np.sqrt(sol.root)*x, yp)
     ax[0].set_xlabel(x_label)
-    ax[0].set_ylabel('Penalty')
+    ax[0].set_ylabel('Probability density')
     ax[0].legend(['Gaussian mixture', 'Reference'])
-    ax[1].plot(obj)
-    ax[1].set_xlabel('Iteration')
-    ax[1].set_ylabel('Objective')
-    plt.plot(obj)
+    # penalty
+    ax[1].plot(np.sqrt(sol.root)*x, -np.log(y))
+    ax[1].plot(np.sqrt(sol.root)*x, -np.log(yp))
+    ax[1].set_xlabel(x_label)
+    ax[1].set_ylabel('Penalty')
+    ax[1].legend(['Gaussian mixture', 'Reference'])
+    fig.suptitle("Result")
+
+    fig, ax = plt.subplots()
+    ax.plot(np.arange(0, cfg.train.n_iter), obj)
+    fig.suptitle("Objective")
     plt.show()
