@@ -4,6 +4,7 @@ from torch.autograd.function import once_differentiable
 import numpy as np
 import scipy as sp
 import time
+import torch.nn.functional as F
 
 import triag_solve_cuda
 
@@ -56,6 +57,19 @@ def backward_substitution(A, B, C, X):
     return Y
 
 
+def ABC_matrix_np(A, B, C):
+    """
+    Generate an MN x MN matrix from the MxN, MxN-1 and M-1xN arrays A, B, C
+    """
+    M, N = A.shape
+    a = A.ravel()   # Row-wise stacking
+    c = C.ravel()
+    A_mat = np.diag(a)
+    B_mat = sp.linalg.block_diag(*[np.diag(B[i, :], -1) for i in range(M)])
+    C_mat = np.diag(c, -N)
+    return A_mat + B_mat + C_mat
+
+
 def forward_substitution_npsolve(A, B, C, X):
     """
     Solves J*y=x where J is lower triangular matrix, represented by A: M x N (center pixels), B: M x N-1
@@ -63,13 +77,8 @@ def forward_substitution_npsolve(A, B, C, X):
     Only one system can be solved at once.
     """
     M, N = A.shape
-    a = A.ravel()   # Row-wise stacking
-    c = C.ravel()
     x = X.ravel()
-    A_mat = np.diag(a)
-    B_mat = sp.linalg.block_diag(*[np.diag(B[i, :], -1) for i in range(M)])
-    C_mat = np.diag(c, -N)
-    J_mat = A_mat + B_mat + C_mat
+    J_mat = ABC_matrix_np(A, B, C)
     y = np.linalg.solve(J_mat, x)
     return y.reshape(M, N)
 
@@ -81,13 +90,14 @@ def backward_substitution_npsolve(A, B, C, X):
     Only one system can be solved at once.
     """
     M, N = A.shape
-    a = A.ravel()   # Row-wise stacking
-    c = C.ravel()
     x = X.ravel()
-    A_mat = np.diag(a)
-    B_mat = sp.linalg.block_diag(*[np.diag(B[i, :], -1) for i in range(M)])
-    C_mat = np.diag(c, -N)
-    J_mat = A_mat + B_mat + C_mat
+    J_mat = ABC_matrix_np(A, B, C)
+
+    import matplotlib.pyplot as plt
+    import pprint
+    pprint.pprint(J_mat)
+    plt.imshow(J_mat, cmap='gray')
+    plt.show()
     y = np.linalg.solve(J_mat.T, x)
     return y.reshape(M, N)
 
@@ -260,6 +270,53 @@ def trans_inverse_l1norm_exact(A, B, C):
     #return np.linalg.norm(S_mat, ord=1)
     return np.linalg.norm(J_mat.T) * np.linalg.norm(S_mat, ord=1)
 
+
+def natural_gradient_np(G, T):
+    H = T.T @ G
+    Hbb = np.tril(H) - np.diag(np.diag(H))/2
+    Q = T @ Hbb
+    return Q
+
+
+def natural_gradient(GA, GB, GC, TA, TB, TC):
+    """
+    Calculates the natural gradient with respect to T. G represents the Euclidean gradient and T represents the
+    lower-triangular Cholesky factor of a precision matrix.
+    """
+    # Compute H double bar
+    h_ll = (TA * GA + F.pad(TB * GB, [0, 1]) + F.pad(TC * GC, [0, 0, 0, 1])) / 2
+    h_l1l = TA[:, :, :, 1:] * GB
+    h_lNl = TA[:, :, 1:, :] * GC
+    h_lN1l = TB[:, :, 1:, :] * GC[:, :, :, 1:]
+
+    # Compute the natural gradient
+    q_ll = TA * h_ll
+    q_l1l = TA[:, :, :, 1:] * h_l1l + TB * h_ll[:, :, :, :-1]
+    q_lNl = TA[:, :, 1:, :] * h_lNl + F.pad(TB[:, :, 1:, :] * h_lN1l, [1, 0]) + TC * h_ll[:, :, :-1, :]
+    return q_ll, q_l1l, q_lNl
+
+
+class NaturalGradientIdentity(Function):
+    @staticmethod
+    def forward(ctx, A, B, C, X):
+        ctx.save_for_backward(A, B, C, X)
+        return A, B, C, X
+
+    @staticmethod
+    @once_differentiable
+    def backward(ctx, dA, dB, dC, dX):
+        A, B, C, X = ctx.saved_tensors
+
+        # Natural gradient with respect to X (the mean)
+        dX_n = triag_solve_cuda.forward_substitution(A, B, C, dX)
+        dX_n = triag_solve_cuda.backward_substitution(A, B, C, dX_n)
+
+        # Natural gradient with respect to T
+        dA_n, dB_n, dC_n = natural_gradient(dA, dB, dC, A, B, C)
+
+        return dA_n, dB_n, dC_n, dX_n
+
+
 def check_gradient():
     M = 15   # Rows
     N = 15   # Cols
@@ -340,6 +397,42 @@ def check_inverse_l1norm():
     print("Trans Exact: ", norm)
 
 
+def check_natural_gradient():
+    M = 20  # Rows
+    N = 10  # Cols
+    GA = torch.randn((M, N), dtype=torch.double)
+    GB = torch.randn(M, N - 1, dtype=torch.double)  # left
+    GC = torch.randn(M - 1, N, dtype=torch.double)  # up
+    TA = torch.randn((M, N), dtype=torch.double)
+    TB = torch.randn(M, N - 1, dtype=torch.double)  # left
+    TC = torch.randn(M - 1, N, dtype=torch.double)  # up
+
+    # In numpy
+    G = ABC_matrix_np(GA, GB, GC)
+    T = ABC_matrix_np(TA, TB, TC)
+    Q = natural_gradient_np(G, T)
+
+    q_ll, q_l1l, q_lNl = natural_gradient(
+        GA.view(1, 1, M, N), GB.view(1, 1, M, N-1), GC.view(1, 1, M-1, N),
+        TA.view(1, 1, M, N), TB.view(1, 1, M, N-1), TC.view(1, 1, M-1, N)
+    )
+
+    q_ll = q_ll.squeeze().detach().numpy().ravel()
+    err = np.abs(np.diag(Q) - q_ll)
+    print("q_ll: ", np.max(err))
+
+    q_l1l = q_l1l.squeeze().detach().numpy().ravel()
+    B = np.ones((M, N-1))
+    B_mask = sp.linalg.block_diag(*[np.diag(B[i, :], -1) for i in range(M)]).astype(bool)
+    err = np.abs(Q[B_mask] - q_l1l)
+    print("q_l1l: ", np.max(err))
+
+    q_lNl = q_lNl.squeeze().detach().numpy().ravel()
+    C = np.ones((M-1, N))
+    C_mask = np.diag(C.ravel(), -N).astype(bool)
+    err = np.abs(Q[C_mask] - q_lNl)
+    print("q_lNl: ", np.max(err))
+
 if __name__ == '__main__':
     torch.use_deterministic_algorithms(True)
-    check_solver()
+    check_natural_gradient()

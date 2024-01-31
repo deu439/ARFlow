@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import math
 
 from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_invalid, census_loss_no_penalty, image_grads, robust_l1, abs_robust_loss, upsample
-from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product, matrix_vector_product_T
+from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product, matrix_vector_product_T, NaturalGradientIdentity
 
 
 def log_gmm(x, pi, beta):
@@ -179,6 +179,19 @@ class UFlowElboLoss(nn.modules.Module):
 
         im1_0 = target[:, :3]
         im2_0 = target[:, 3:]
+
+        # Apply identity function that implements natural gradient computation #
+        ########################################################################
+        if self.cfg.natural_grad:
+            diag12_2, left12_2, over12_2, mean12_2 = NaturalGradientIdentity.apply(
+                diag12_2.contiguous(), left12_2.contiguous(), over12_2.contiguous(), mean12_2.contiguous()
+            )
+            diag21_2, left21_2, over21_2, mean21_2 = NaturalGradientIdentity.apply(
+                diag21_2.contiguous(), left21_2.contiguous(), over21_2.contiguous(), mean21_2.contiguous()
+            )
+            # Update the log values
+            log_diag12_2 = torch.log(diag12_2)
+            log_diag21_2 = torch.log(diag21_2)
 
         # Regularization of the off-diagonal entries #
         ##############################################
