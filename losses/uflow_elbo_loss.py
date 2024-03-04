@@ -209,17 +209,22 @@ class UFlowElboLoss(nn.modules.Module):
         # Reparametrization trick #
         ###########################
         if self.cfg.diag and not self.cfg.inv_cov:
-            flow12_2 = self.reparam_diag(mean12_2, log_diag12_2)
-            flow21_2 = self.reparam_diag(mean21_2, log_diag21_2)
+            flow12_2 = self.reparam_diag(mean12_2, log_diag12_2, nsamples=self.cfg.n_samples)
+            flow21_2 = self.reparam_diag(mean21_2, log_diag21_2, nsamples=self.cfg.n_samples)
         elif self.cfg.diag and self.cfg.inv_cov:
-            flow12_2 = self.reparam_diag_inv(mean12_2, log_diag12_2)
-            flow21_2 = self.reparam_diag_inv(mean21_2, log_diag21_2)
+            flow12_2 = self.reparam_diag_inv(mean12_2, log_diag12_2, nsamples=self.cfg.n_samples)
+            flow21_2 = self.reparam_diag_inv(mean21_2, log_diag21_2, nsamples=self.cfg.n_samples)
         elif not self.cfg.diag and not self.cfg.inv_cov:
-            flow12_2 = self.reparam_triag(mean12_2, diag12_2, left12_2, over12_2)
-            flow21_2 = self.reparam_triag(mean21_2, diag21_2, left21_2, over21_2)
+            flow12_2 = self.reparam_triag(mean12_2, diag12_2, left12_2, over12_2, nsamples=self.cfg.n_samples)
+            flow21_2 = self.reparam_triag(mean21_2, diag21_2, left21_2, over21_2, nsamples=self.cfg.n_samples)
         elif not self.cfg.diag and self.cfg.inv_cov:
-            flow12_2 = self.reparam_triag_inv(mean12_2, diag12_2, left12_2, over12_2)
-            flow21_2 = self.reparam_triag_inv(mean21_2, diag21_2, left21_2, over21_2)
+            flow12_2 = self.reparam_triag_inv(mean12_2, diag12_2, left12_2, over12_2, nsamples=self.cfg.n_samples)
+            flow21_2 = self.reparam_triag_inv(mean21_2, diag21_2, left21_2, over21_2, nsamples=self.cfg.n_samples)
+
+        # Repeat to take into account number of MC samples #
+        ####################################################
+        im1_0 = im1_0.repeat(self.cfg.n_samples, 1, 1, 1)
+        im2_0 = im2_0.repeat(self.cfg.n_samples, 1, 1, 1)
 
         # Calculate entropy loss #
         ##########################
