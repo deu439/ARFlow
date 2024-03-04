@@ -1,10 +1,12 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.autograd import Function
+from torch.autograd.function import once_differentiable
 
 import math
 
-from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_invalid, census_loss_no_penalty, image_grads, robust_l1, abs_robust_loss, upsample
+from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_invalid, census_loss_no_penalty, image_grads, robust_l1, abs_robust_loss, upsample, ssim_loss, charbonnier
 from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product, matrix_vector_product_T, NaturalGradientIdentity
 
 
@@ -15,6 +17,17 @@ def log_gmm(x, pi, beta):
     w = pi * torch.sqrt(beta) / math.sqrt(2 * torch.pi)
     c = torch.max(arg, dim=-1).values
     return c + torch.log(torch.sum(w * torch.exp(arg - c.unsqueeze(-1)), dim=-1))
+
+
+class SlowDownIdentity(Function):
+    @staticmethod
+    def forward(ctx, A, B, C, X):
+        return A, B, C, X
+
+    @staticmethod
+    @once_differentiable
+    def backward(ctx, dA, dB, dC, dX):
+        return dA / 100.0, dB / 100.0, dC / 100.0, dX
 
 
 class UFlowElboLoss(nn.modules.Module):
@@ -110,9 +123,18 @@ class UFlowElboLoss(nn.modules.Module):
 
         # Calculate photometric loss on level 0 #
         #########################################
-        loss12, weight12 = census_loss_no_penalty(im1_0, im1_recons, mask1)
+        pixel_loss = []
+        pixel_weight = []
+        for type in self.cfg.data_loss:
+            if type == "census":
+                l, w = census_loss_no_penalty(im1_0, im1_recons, mask1)
+            elif type == "ssim":
+                l, w = ssim_loss(im1_0, im1_recons, mask1)
 
-        return loss12, self.cfg.w_census * weight12
+            pixel_loss.append(l)
+            pixel_weight.append(w)
+
+        return pixel_loss, pixel_weight
 
     def smooth_loss_no_penalty(self, im1_0, flow12_2):
         # Calculate smoothness loss on level 2 #
@@ -188,6 +210,13 @@ class UFlowElboLoss(nn.modules.Module):
             log_diag12_2 = torch.log(diag12_2)
             log_diag21_2 = torch.log(diag21_2)
 
+        if self.cfg.slow_down:
+            diag12_2, left12_2, over12_2, mean12_2 = SlowDownIdentity.apply(diag12_2, left12_2, over12_2, mean12_2)
+            diag21_2, left21_2, over21_2, mean21_2 = SlowDownIdentity.apply(diag21_2, left21_2, over21_2, mean21_2)
+            # Update the log values
+            log_diag12_2 = torch.log(diag12_2)
+            log_diag21_2 = torch.log(diag21_2)
+
         # Regularization of the off-diagonal entries #
         ##############################################
         loss_offdiag = 0
@@ -198,13 +227,14 @@ class UFlowElboLoss(nn.modules.Module):
 
         # Calculate l1 norm of the precision matrix inverse #
         #####################################################
-        #K, L = mean12_2.shape[0:2]
-        #inv_l1norm = 0.0
-        #for k in range(K):
-        #    for l in range(L):
-        #        out12 += inverse_l1norm(diag12_2[k, l], left12_2[k, l], over12_2[k, l], n_iter=10).item()
-        #        out21 += inverse_l1norm(diag21_2[k, l], left21_2[k, l], over21_2[k, l], n_iter=10).item()
-        #        inv_l1norm = max(inv_l1norm, out12, out21)
+        K, L = mean12_2.shape[0:2]
+        inv_l1norm = 0.0
+        # if not self.cfg.diag:
+        #     for k in range(K):
+        #         for l in range(L):
+        #             out12 = inverse_l1norm(diag12_2[k, l], left12_2[k, l], over12_2[k, l], n_iter=10).item()
+        #             out21 = inverse_l1norm(diag21_2[k, l], left21_2[k, l], over21_2[k, l], n_iter=10).item()
+        #             inv_l1norm = max(inv_l1norm, out12, out21)
 
         # Reparametrization trick #
         ###########################
@@ -263,17 +293,27 @@ class UFlowElboLoss(nn.modules.Module):
 
         # Data loss on level 0 #
         ########################
-        if self.cfg.penalty_census == "abs_robust_loss":
-            penalty_func_census = abs_robust_loss
-        elif self.cfg.penalty_census == "gmm":
-            penalty_func_census = lambda x: -log_gmm(x, self.cfg.penalty_census_pi, self.cfg.penalty_census_beta)
+        penalty_list = []
+        for type in self.cfg.data_penalty:
+            if type == "identity":
+                penalty_list.append(lambda x: x)
+            elif type == "abs_robust_loss":
+                penalty_list.append(abs_robust_loss)
+            elif type == "gmm":
+                penalty_list.append(lambda x: -log_gmm(x, self.cfg.penalty_census_pi, self.cfg.penalty_census_beta))
+            elif type == "charbonnier":
+                penalty_list.append(charbonnier)
 
-        data_loss12, data_weight12 = self.data_loss_no_penalty(im1_0, im2_0, flow12_2, flow21_2, mean12_2, mean21_2)
-        loss_warp = torch.sum(data_weight12 * penalty_func_census(data_loss12))
+        loss_warp = 0
+        data_pixel_loss12, data_pixel_weight12 = self.data_loss_no_penalty(im1_0, im2_0, flow12_2, flow21_2, mean12_2, mean21_2)
+        for pixel_loss, pixel_weight, weight, penalty in zip(data_pixel_loss12, data_pixel_weight12, self.cfg.data_weight, penalty_list):
+            loss_warp += torch.sum(pixel_weight * weight * penalty(pixel_loss))
+
         if self.cfg.with_bk:
             # Here the arguments are passed in reversed order!
-            data_loss21, data_weight21 = self.data_loss_no_penalty(im2_0, im1_0, flow21_2, flow12_2, mean21_2, mean12_2)
-            loss_warp += torch.sum(data_weight21 * penalty_func_census(data_loss21))
+            data_pixel_loss21, data_pixel_weight21 = self.data_loss_no_penalty(im2_0, im1_0, flow21_2, flow12_2, mean21_2, mean12_2)
+            for pixel_loss, pixel_weight, weight, penalty in zip(data_pixel_loss21, data_pixel_weight21, self.cfg.data_weight, penalty_list):
+                loss_warp += torch.sum(pixel_weight * weight * penalty(pixel_loss))
 
         # Smoothness loss on level 2 #
         ##############################

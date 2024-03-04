@@ -30,7 +30,9 @@ cfg = {
         "edge_constant": 150,
         "type": "uflow_elbo",
         "w_smooth": 4.0,
-        "w_census": 1.0,
+        "data_loss": ["ssim"],
+        "data_weight": [1.0],
+        "data_penalty": ["identity"],
         "w_entropy": 0.1,
         "with_bk": True,
         "align_corners": False,
@@ -248,14 +250,14 @@ if __name__ == "__main__":
 
         # Calculate data loss
         if cfg.train.penalty == 'data':
-            data_loss12, data_weight12 = loss_funct.data_loss_no_penalty(im1_0, im2_0, flows12_2, flows21_2)
-            loss_list = [data_loss12]
-            weight_list = [data_weight12]
+            data_pixel_loss12, data_pixel_weight12 = loss_funct.data_loss_no_penalty(im1_0, im2_0, flows12_2, flows21_2)
+            loss_list = [data_pixel_loss12[0]]
+            weight_list = [data_pixel_weight12[0]]
             if cfg.loss.with_bk:
                 # Arguments are passed in reverse order!
-                data_loss21, data_weight21 = loss_funct.data_loss_no_penalty(im2_0, im1_0, flows21_2, flows12_2)
-                loss_list += [data_loss21, ]
-                weight_list += [data_weight21, ]
+                data_pixel_loss21, data_pixel_weight21 = loss_funct.data_loss_no_penalty(im2_0, im1_0, flows21_2, flows12_2)
+                loss_list += [data_pixel_loss21[0], ]
+                weight_list += [data_pixel_weight21[0], ]
 
         else:
             # Calculate smoothness loss

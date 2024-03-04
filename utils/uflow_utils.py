@@ -247,6 +247,13 @@ def abs_robust_loss(diff, eps=0.01, q=0.4):
     return torch.pow((torch.abs(diff) + eps), q)
 
 
+def charbonnier(x_sq, eps=0.001):
+    if type(x_sq) is list:
+        x_sq = sum(x_sq)
+
+    return torch.sqrt(x_sq + eps**2)
+
+
 def compute_loss(i1, warped2, flow, use_mag_loss=False):
     loss = torch.nn.functional.l1_loss(warped2, i1)
     if use_mag_loss:
@@ -337,3 +344,31 @@ def census_loss_no_penalty(image_a, image_b, mask, patch_size=7):
     padded_mask = zero_mask_border(mask, patch_size)
 
     return hamming, padded_mask / (torch.sum(padded_mask.detach()) + 1e-6)
+
+
+def ssim_loss(image_a, image_b, mask, patch_size=7):
+    C1 = 0.01 ** 2
+    C2 = 0.03 ** 2
+
+    mu_x = nn.AvgPool2d(patch_size, 1, patch_size//2)(image_a)
+    mu_y = nn.AvgPool2d(patch_size, 1, patch_size//2)(image_b)
+    mu_x_mu_y = mu_x * mu_y
+    mu_x_sq = mu_x.pow(2)
+    mu_y_sq = mu_y.pow(2)
+
+    sigma_x = nn.AvgPool2d(patch_size, 1, patch_size//2)(image_a * image_a) - mu_x_sq
+    sigma_y = nn.AvgPool2d(patch_size, 1, patch_size//2)(image_b * image_b) - mu_y_sq
+    sigma_xy = nn.AvgPool2d(patch_size, 1, patch_size//2)(image_a * image_b) - mu_x_mu_y
+
+    #SSIM_n = (2 * mu_x_mu_y + C1) * (2 * sigma_xy + C2)
+    #SSIM_d = (mu_x_sq + mu_y_sq + C1) * (sigma_x + sigma_y + C2)
+    #SSIM = SSIM_n / SSIM_d
+    # dist = torch.clamp((1 - SSIM) / 2, 0, 1)
+
+    S1 = (2 * mu_x_mu_y + C1) / (mu_x_sq + mu_y_sq + C1)
+    S2 = (2 * sigma_xy + C2) / (sigma_x + sigma_y + C2)
+    d1_sq = torch.clamp(1 - S1, min=0, max=1)
+    d2_sq = torch.clamp(1 - S2, min=0, max=1)
+    
+    padded_mask = zero_mask_border(mask, patch_size=patch_size)
+    return [d1_sq, d2_sq], padded_mask / (torch.sum(padded_mask.detach()) + 1e-6)
