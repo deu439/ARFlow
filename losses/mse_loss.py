@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import numpy as np
 
 from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product, matrix_vector_product_T
 from utils.flow_utils import resize_flow
@@ -83,9 +84,19 @@ class MseLoss(nn.modules.Module):
                            + torch.nn.functional.pad(torch.abs(left12_2), (1, 0)) \
                            + torch.nn.functional.pad(torch.abs(over12_2), (0, 0, 1, 0))
 
+        #print("log_diag:", torch.mean(log_diag12_2), torch.std(log_diag12_2))
+        #print("left:", torch.mean(left12_2), torch.std(left12_2))
+        #print("over:", torch.mean(over12_2), torch.std(over12_2))
+
+        # Regularization of the off-diagonal entries #
+        ##############################################
+        loss_offdiag = 0
+        if not self.cfg.diag:
+            loss_offdiag = self.cfg.offdiag_reg*(torch.mean(torch.square(left12_2)) + torch.mean(torch.square(over12_2))) / 2.0
+
         # Calculate l1 norm of the precision matrix inverse #
         #####################################################
-        inv_l1norm = 0.0
+        #inv_l1norm = 0.0
         #if not self.cfg.diag:
         #    K, L = mean12_2.shape[0:2]
         #    for k in range(K):
@@ -96,13 +107,13 @@ class MseLoss(nn.modules.Module):
         # Reparametrization trick #
         ###########################
         if self.cfg.diag and not self.cfg.inv_cov:
-            flow12_2 = self.reparam_diag(mean12_2, log_diag12_2)
+            flow12_2 = self.reparam_diag(mean12_2, log_diag12_2, nsamples=self.cfg.n_samples)
         elif self.cfg.diag and self.cfg.inv_cov:
-            flow12_2 = self.reparam_diag_inv(mean12_2, log_diag12_2)
+            flow12_2 = self.reparam_diag_inv(mean12_2, log_diag12_2, nsamples=self.cfg.n_samples)
         elif not self.cfg.diag and not self.cfg.inv_cov:
-            flow12_2 = self.reparam_triag(mean12_2, diag12_2, left12_2, over12_2)
+            flow12_2 = self.reparam_triag(mean12_2, diag12_2, left12_2, over12_2, nsamples=self.cfg.n_samples)
         elif not self.cfg.diag and self.cfg.inv_cov:
-            flow12_2 = self.reparam_triag_inv(mean12_2, diag12_2, left12_2, over12_2)
+            flow12_2 = self.reparam_triag_inv(mean12_2, diag12_2, left12_2, over12_2, nsamples=self.cfg.n_samples)
 
         # Calculate entropy loss #
         ##########################
@@ -123,10 +134,15 @@ class MseLoss(nn.modules.Module):
         # Resize the ground-truth flow & calculate loss
         _, _, height, width = flow12_2.size()
         gt_flow12_2 = resize_flow(target, new_shape=(height, width), align_corners=self.cfg.align_corners)
-        loss_mse = self.cfg.w_mse * torch.mean(torch.square(flow12_2 - gt_flow12_2))
+        loss_mse = self.cfg.w_mse * torch.mean(torch.square(flow12_2 - gt_flow12_2.repeat(self.cfg.n_samples, 1, 1, 1)))
 
         # Calculate total loss #
         ########################
-        total_loss = loss_mse - loss_entropy
+        if np.isnan(loss_mse.item()):
+            print("NaN in loss_mse")
+        if np.isnan(loss_entropy.item()):
+            print("NaN in loss_entropy")
 
-        return total_loss, loss_mse, loss_entropy, inv_l1norm
+        total_loss = loss_mse - loss_entropy + loss_offdiag
+
+        return total_loss, loss_mse, loss_entropy, loss_offdiag
