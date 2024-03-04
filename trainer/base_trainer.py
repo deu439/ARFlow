@@ -76,7 +76,7 @@ class BaseTrainer:
         return model
 
     def _create_optimizer(self):
-        self._log.info('=> setting Adam solver')
+        self._log.info('=> setting {} solver'.format(self.cfg.optim))
         param_groups = [
             {'params': bias_parameters(self.model.module),
              'weight_decay': self.cfg.bias_decay},
@@ -90,6 +90,9 @@ class BaseTrainer:
             optimizer = torch.optim.Adam(param_groups, self.cfg.lr,
                                          betas=(self.cfg.momentum, self.cfg.beta),
                                          eps=1e-7)
+        elif self.cfg.optim == 'sgd':
+            optimizer = torch.optim.SGD(param_groups, self.cfg.lr,
+                                        momentum=self.cfg.momentum)
         else:
             raise NotImplementedError(self.cfg.optim)
         return optimizer
