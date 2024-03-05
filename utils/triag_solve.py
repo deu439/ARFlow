@@ -321,10 +321,10 @@ class NaturalGradientIdentity(Function):
 def check_gradient():
     M = 5   # Rows
     N = 5   # Cols
-    A = 2*torch.ones((2, 2, M, N), requires_grad=True, dtype=torch.double)
-    B = torch.randn(2, 2, M, N-1, requires_grad=True, dtype=torch.double) # left
-    C = torch.randn(2, 2, M-1, N, requires_grad=True, dtype=torch.double) # up
-    X = torch.randn(2, 2, M, N, requires_grad=True, dtype=torch.double)
+    A = 2*torch.ones((2, 2, M, N), requires_grad=True, dtype=torch.double).cuda()
+    B = torch.randn(2, 2, M, N-1, requires_grad=True, dtype=torch.double).cuda()  # left
+    C = torch.randn(2, 2, M-1, N, requires_grad=True, dtype=torch.double).cuda()  # up
+    X = torch.randn(2, 2, M, N, requires_grad=True, dtype=torch.double).cuda()
 
     # Exact gradient
     res = gradcheck(ForwardSubst().apply, (A, B, C, X))

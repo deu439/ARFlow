@@ -1,4 +1,4 @@
- {"data": [{"root_chairs": "/home/deu/Datasets/FlyingChairs_release/data",
+ {"data": [{"root_chairs": "./datasets/FlyingChairs_release/data",
           "run_at": false,
           "test_shape": [384, 512],
           "train_n_frames": 2,

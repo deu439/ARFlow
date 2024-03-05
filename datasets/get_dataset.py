@@ -70,7 +70,7 @@ def get_dataset(all_cfg):
             valid_input_transform = copy.deepcopy(input_transform)
             valid_input_transform.transforms.insert(0, sep_transforms.Zoom(*cfg.test_shape))
 
-            valid_set_1 = Chairs(cfg.root_chairs, n_frames=cfg.val_n_frames, split='valid', with_flow=True,
+            valid_set_1 = Ch<airs(cfg.root_chairs, n_frames=cfg.val_n_frames, split='valid', with_flow=True,
                                transform=valid_input_transform, target_transform={'flow': sep_transforms.ArrayToTensor()})
             valid_set += [valid_set_1]
 
