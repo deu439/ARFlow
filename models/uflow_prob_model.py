@@ -111,7 +111,7 @@ class PWCProbFlow(nn.Module):
         self._out_channels = cfg.out_channels
         # There's no more than 4 channels at intermediate levels, because upsampling off-diagonal elements of covariance
         # or precision matrix does not make sense.
-        self._out_channels_int = 4
+        self._out_channels_int = cfg.out_channels_int
         # Bias added to the diagonal elements of covariance/precision matrix when upsampling.
         self._diag_bias = -math.log(2) if cfg.inv_cov else math.log(2)
         self._inv_cov = cfg.inv_cov
@@ -178,7 +178,7 @@ class PWCProbFlow(nn.Module):
                 flow_up = torch.zeros([batch_size, 2, height, width], device=features1.device)
                 # Start at log_diag ~ 0.0 at level 2 (the output level)
                 log_diag_up = -(self._num_levels-2) * self._diag_bias \
-                              * torch.ones([batch_size, 2, height, width], device=features1.device)
+                              * torch.ones([batch_size, self._out_channels_int - 2, height, width], device=features1.device)
                 out_up = torch.cat([flow_up, log_diag_up], dim=1)
 
                 if self._num_context_up_channels:
@@ -278,7 +278,7 @@ class PWCProbFlow(nn.Module):
 
         refined_out = out + refinement
 
-        flow, log_diag, rest = torch.split(refined_out, [2, 2, self._out_channels - 4], dim=1)
+        flow, log_diag, rest = torch.split(refined_out, [2, self._out_channels_int-2, self._out_channels - self._out_channels_int], dim=1)
         # Ensure log(precision)/2 is not too small
         if self._inv_cov:
             outs[0] = torch.cat([flow, torch.clamp(log_diag, min=-5.0), rest], dim=1)

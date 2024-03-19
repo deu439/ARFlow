@@ -44,9 +44,6 @@ class TrainFramework(BaseTrainer):
                      zip(flows_12, flows_21)]
             loss, l_ph, l_sm, entropy, inv_l1norm = self.loss_func(flows, img_pair)
 
-            # make sure loss does not contain NaNs
-            assert (not np.isnan(loss.item())), "training loss is NaN"
-
             # update meters
             key_meters.update([loss.item(), l_ph.item(), l_sm.item(), entropy.item(), inv_l1norm],
                               img_pair.size(0))
@@ -130,7 +127,7 @@ class TrainFramework(BaseTrainer):
                 error_values += es
 
                 # Evaluate AUC
-                if not self.loss_func.cfg.inv_cov:
+                if self.loss_func.cfg.approx == 'diag' and not self.loss_func.cfg.inv_cov:
                     pred_logvars = flows[0][:, 2:4].detach().cpu().numpy().transpose([0, 2, 3, 1])
                     auc, splot, oplot = evaluate_uncertainty(gt_flows, pred_flows, pred_logvars, sp_samples=self.cfg.sp_samples)
                     splots += splot

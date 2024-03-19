@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,7 +8,7 @@ from torch.autograd.function import once_differentiable
 import math
 
 from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_invalid, census_loss_no_penalty, image_grads, robust_l1, abs_robust_loss, upsample, ssim_loss, charbonnier
-from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product, matrix_vector_product_T, NaturalGradientIdentity
+from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product, matrix_vector_product_T, NaturalGradientIdentityT, NaturalGradientIdentityC
 
 
 def log_gmm(x, pi, beta):
@@ -17,6 +18,11 @@ def log_gmm(x, pi, beta):
     w = pi * torch.sqrt(beta) / math.sqrt(2 * torch.pi)
     c = torch.max(arg, dim=-1).values
     return c + torch.log(torch.sum(w * torch.exp(arg - c.unsqueeze(-1)), dim=-1))
+
+
+def log_sum_exp(x, w=1, dim=0):
+    x_max, _ = torch.max(x, dim=dim)
+    return x_max + torch.log(torch.sum(w * torch.exp(x - x_max.unsqueeze(-1)), dim=dim))
 
 
 class SlowDownIdentity(Function):
@@ -81,6 +87,51 @@ class UFlowElboLoss(nn.modules.Module):
         eps = self.Normal.sample(mean.size())
         z = mean + BackwardSubst.apply(diag, left, over, eps)
         return z
+
+    def reparam_gmm(self, mean, diag, nsamples=1):
+        """
+        Generates normal distributed samples with a given mean and variance.
+        mean: mean - tensor of size (batch, 2, height, width)
+        log_diag: log(variance)/2=log(std) - tensor of size (batch, 2, height, width)
+        returns: samples - tensor of size (Nsamples*batch, 2, height, width)
+        """
+        K = self.cfg.n_components
+        rows, cols = mean.shape[2:]
+        mean = mean.repeat(nsamples, 1, 1, 1)
+        zu = torch.randint(0, K, size=[nsamples])
+        zv = torch.randint(K, 2*K, size=[nsamples])
+        # Batches change fast, samples slow (to be consistent with the means array)
+        diag_u = diag[:, zu].transpose(1,0).reshape(-1, 1, rows, cols)
+        diag_v = diag[:, zv].transpose(1,0).reshape(-1, 1, rows, cols)
+        diag = torch.cat((diag_u, diag_v), dim=1)
+        z = mean + diag * self.Normal.sample(mean.size())
+        return z
+
+    def gaussian_mixture_log_pdf(self, flow, mean, log_diag):
+        nsamples = int(flow.size(0) / mean.size(0))
+        K = self.cfg.n_components
+        mean = mean.repeat(nsamples, 1, 1, 1)
+        log_diag = log_diag.repeat(nsamples, 1, 1, 1)
+        diag = torch.exp(log_diag)
+
+        # vertical component
+        u_err = (flow[:, 0] - mean[:, 0])[:, None] / diag[:, 0:K]     # (nsamples * batch_size, K, rows, cols)
+        u_sum_sq = torch.sum(u_err*u_err, dim=(2, 3))                 # (nsamples * batch_size, K)
+        log_det_u = torch.sum(log_diag[:, 0:K], dim=(2,3))            # (nsamples * batch_size, K)
+        #det_u = torch.prod(diag[:, 0:K], dim=-1)                      # (nsamples * batch_size, K, rows)
+        #det_u = torch.prod(det_u, dim=-1)                             # (nsamples * batch_size, K)
+        log_pdf_u = log_sum_exp(-log_det_u - u_sum_sq / 2, 1, dim=1)        # (nsamples * batch_size)
+
+        # horizontal component
+        v_err = (flow[:, 1] - mean[:, 1])[:, None] / diag[:, K:2*K]   # (nsamples * batch_size, K, rows, cols)
+        v_sum_sq = torch.sum(v_err*v_err, dim=(2, 3))                 # (nsamples * batch_size, K)
+        log_det_v = torch.sum(log_diag[:, K:2*K], dim=(2,3))          # (nsamples * batch_size, K)
+        #det_v = torch.prod(diag[:, K:2*K], dim=-1)                    # (nsamples * batch_size, K, rows)
+        #det_v = torch.prod(det_v, dim=-1)                             # (nsamples * batch_size, K)
+        log_pdf_v = log_sum_exp(-log_det_v - v_sum_sq / 2, 1, dim=1)        # (nsamples * batch_size)
+
+        return log_pdf_u + log_pdf_v
+
 
     def data_loss_no_penalty(self, im1_0, im2_0, flow12_2, flow21_2, mean12_2=None, mean21_2=None):
         """
@@ -163,14 +214,15 @@ class UFlowElboLoss(nn.modules.Module):
         """
 
         # Get level 2 outputs - before upsampling
-        if self.cfg.diag:
+        if self.cfg.approx == 'diag':
             mean12_2 = output[2][:, 0:2]
             log_diag12_2 = output[2][:, 2:4]
             mean21_2 = output[2][:, 4:6]
             log_diag21_2 = output[2][:, 6:8]
             diag12_2 = torch.exp(log_diag12_2)
             diag21_2 = torch.exp(log_diag21_2)
-        else:
+
+        elif self.cfg.approx == 'sparse':
             mean12_2 = output[2][:, 0:2]
             log_diag12_2 = output[2][:, 2:4]
             left12_2 = output[2][:, 4:6, :, :-1]
@@ -194,18 +246,38 @@ class UFlowElboLoss(nn.modules.Module):
                 log_diag12_2 = torch.log(diag12_2)
                 log_diag21_2 = torch.log(diag21_2)
 
+        elif self.cfg.approx == 'mixture':
+            K = self.cfg.n_components
+            mean12_2 = output[2][:, 0:2]
+            log_diag12_2 = output[2][:, 2:2+2*K]
+            mean21_2 = output[2][:, 2+2*K:4+2*K]
+            log_diag21_2 = output[2][:, 4+2*K:4+4*K]
+            diag12_2 = torch.exp(log_diag12_2)
+            diag21_2 = torch.exp(log_diag21_2)
+            #print("mean, var:", torch.mean(log_diag12_2), torch.std(log_diag12_2))
+            #print("mean, var:", torch.mean(log_diag21_2), torch.std(log_diag21_2))
+
         im1_0 = target[:, :3]
         im2_0 = target[:, 3:]
 
         # Apply identity function that implements natural gradient computation #
         ########################################################################
         if self.cfg.natural_grad:
-            diag12_2, left12_2, over12_2, mean12_2 = NaturalGradientIdentity.apply(
-                diag12_2.contiguous(), left12_2.contiguous(), over12_2.contiguous(), mean12_2.contiguous()
-            )
-            diag21_2, left21_2, over21_2, mean21_2 = NaturalGradientIdentity.apply(
-                diag21_2.contiguous(), left21_2.contiguous(), over21_2.contiguous(), mean21_2.contiguous()
-            )
+            if self.cfg.inv_cov:
+                diag12_2, left12_2, over12_2, mean12_2 = NaturalGradientIdentityT.apply(
+                    diag12_2.contiguous(), left12_2.contiguous(), over12_2.contiguous(), mean12_2.contiguous()
+                )
+                diag21_2, left21_2, over21_2, mean21_2 = NaturalGradientIdentityT.apply(
+                    diag21_2.contiguous(), left21_2.contiguous(), over21_2.contiguous(), mean21_2.contiguous()
+                )
+            else:
+                diag12_2, left12_2, over12_2, mean12_2 = NaturalGradientIdentityC.apply(
+                    diag12_2.contiguous(), left12_2.contiguous(), over12_2.contiguous(), mean12_2.contiguous()
+                )
+                diag21_2, left21_2, over21_2, mean21_2 = NaturalGradientIdentityC.apply(
+                    diag21_2.contiguous(), left21_2.contiguous(), over21_2.contiguous(), mean21_2.contiguous()
+                )
+
             # Update the log values
             log_diag12_2 = torch.log(diag12_2)
             log_diag21_2 = torch.log(diag21_2)
@@ -220,7 +292,7 @@ class UFlowElboLoss(nn.modules.Module):
         # Regularization of the off-diagonal entries #
         ##############################################
         loss_offdiag = 0
-        if not self.cfg.diag:
+        if self.cfg.approx == 'sparse':
             loss_offdiag = (torch.mean(torch.square(left12_2)) + torch.mean(torch.square(over12_2))) / 2.0
             if self.cfg.with_bk:
                 loss_offdiag += (torch.mean(torch.square(left21_2)) + torch.mean(torch.square(over21_2))) / 2.0
@@ -238,18 +310,23 @@ class UFlowElboLoss(nn.modules.Module):
 
         # Reparametrization trick #
         ###########################
-        if self.cfg.diag and not self.cfg.inv_cov:
+        if self.cfg.approx == 'diag' and not self.cfg.inv_cov:
             flow12_2 = self.reparam_diag(mean12_2, log_diag12_2, nsamples=self.cfg.n_samples)
             flow21_2 = self.reparam_diag(mean21_2, log_diag21_2, nsamples=self.cfg.n_samples)
-        elif self.cfg.diag and self.cfg.inv_cov:
+        elif self.cfg.approx == 'diag' and self.cfg.inv_cov:
             flow12_2 = self.reparam_diag_inv(mean12_2, log_diag12_2, nsamples=self.cfg.n_samples)
             flow21_2 = self.reparam_diag_inv(mean21_2, log_diag21_2, nsamples=self.cfg.n_samples)
-        elif not self.cfg.diag and not self.cfg.inv_cov:
+        elif self.cfg.approx == 'sparse' and not self.cfg.inv_cov:
             flow12_2 = self.reparam_triag(mean12_2, diag12_2, left12_2, over12_2, nsamples=self.cfg.n_samples)
             flow21_2 = self.reparam_triag(mean21_2, diag21_2, left21_2, over21_2, nsamples=self.cfg.n_samples)
-        elif not self.cfg.diag and self.cfg.inv_cov:
+        elif self.cfg.approx == 'sparse' and self.cfg.inv_cov:
             flow12_2 = self.reparam_triag_inv(mean12_2, diag12_2, left12_2, over12_2, nsamples=self.cfg.n_samples)
             flow21_2 = self.reparam_triag_inv(mean21_2, diag21_2, left21_2, over21_2, nsamples=self.cfg.n_samples)
+        elif self.cfg.approx == 'mixture' and not self.cfg.inv_cov:
+            flow12_2 = self.reparam_gmm(mean12_2, diag12_2, nsamples=self.cfg.n_samples)
+            flow21_2 = self.reparam_gmm(mean21_2, diag21_2, nsamples=self.cfg.n_samples)
+        elif self.cfg.approx == 'mixture' and self.cfg.inv_cov:
+            raise NotImplementedError('Inverse covariance parametrization is not implemented for mixture variational approximation.')
 
         # Repeat to take into account number of MC samples #
         ####################################################
@@ -258,7 +335,7 @@ class UFlowElboLoss(nn.modules.Module):
 
         # Calculate entropy loss #
         ##########################
-        if self.cfg.diag and not self.cfg.inv_cov:
+        if self.cfg.approx == 'diag' and not self.cfg.inv_cov:
             if self.cfg.approx_entropy:
                 tmp12 = (flow12_2 - mean12_2.detach()) / diag12_2.detach()
                 loss_entropy = self.cfg.w_entropy * torch.sum(tmp12*tmp12/2, dim=1).mean()
@@ -269,15 +346,15 @@ class UFlowElboLoss(nn.modules.Module):
                 loss_entropy = self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
                 if self.cfg.with_bk:
                     loss_entropy += self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
-        elif self.cfg.diag and self.cfg.inv_cov:
+        elif self.cfg.approx == 'diag' and self.cfg.inv_cov:
             loss_entropy = -self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
             if self.cfg.with_bk:
                 loss_entropy -= self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
-        elif not self.cfg.diag and not self.cfg.inv_cov:
+        elif self.cfg.approx == 'sparse' and not self.cfg.inv_cov:
             loss_entropy = self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
             if self.cfg.with_bk:
                 loss_entropy += self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
-        elif not self.cfg.diag and self.cfg.inv_cov:
+        elif self.cfg.approx == 'sparse' and self.cfg.inv_cov:
             if self.cfg.approx_entropy:
                 tmp12 = matrix_vector_product_T(diag12_2.detach(), left12_2.detach(), over12_2.detach(),
                                                 flow12_2 - mean12_2.detach())
@@ -290,6 +367,10 @@ class UFlowElboLoss(nn.modules.Module):
                 loss_entropy = -self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
                 if self.cfg.with_bk:
                     loss_entropy -= self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
+        elif self.cfg.approx == 'mixture':
+            loss_entropy = -self.cfg.w_entropy * self.gaussian_mixture_log_pdf(flow12_2, mean12_2, log_diag12_2).mean()
+            if self.cfg.with_bk:
+                loss_entropy -= self.cfg.w_entropy * self.gaussian_mixture_log_pdf(flow21_2, mean21_2, log_diag21_2).mean()
 
         # Data loss on level 0 #
         ########################
@@ -335,7 +416,7 @@ class UFlowElboLoss(nn.modules.Module):
         # Calculate total loss #
         ########################
         total_loss = loss_warp + loss_smooth - loss_entropy
-        if not self.cfg.diag:
+        if self.cfg.approx == 'sparse':
             total_loss += self.cfg.offdiag_reg*loss_offdiag
 
         return total_loss, loss_warp, loss_smooth, loss_entropy, loss_offdiag
