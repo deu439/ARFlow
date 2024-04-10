@@ -226,11 +226,11 @@ def sp_plot(error, entropy, n=25, alpha=100.0, eps=1e-1):
     return splot
 
 
-def evaluate_uncertainty(gt_flows, pred_flows, pred_logvars, sp_samples=25):
+def evaluate_uncertainty(gt_flows, pred_flows, pred_entropies, sp_samples=25):
     sauc, oauc = 0, 0
     splots, oplots = [], []
     B = len(gt_flows)
-    for gt_flow, pred_flow, pred_logvar, i in zip(gt_flows, pred_flows, pred_logvars, range(B)):
+    for gt_flow, pred_flow, pred_entropy, i in zip(gt_flows, pred_flows, pred_entropies, range(B)):
         H, W = gt_flow.shape[:2]
 
         # Resample flow
@@ -241,14 +241,14 @@ def evaluate_uncertainty(gt_flows, pred_flows, pred_logvars, sp_samples=25):
         flo_pred = cv2.resize(pred_flow, (W, H), interpolation=cv2.INTER_LINEAR)
 
         # Resample entropy
-        pred_logvar = np.copy(pred_logvar)
-        pred_logvar[:, :, 0] = pred_logvar[:, :, 0] - 2*math.log(w) + 2*math.log(W)
-        pred_logvar[:, :, 1] = pred_logvar[:, :, 1] - 2*math.log(h) + 2*math.log(H)
-        pred_logvar = cv2.resize(pred_logvar, (W, H), interpolation=cv2.INTER_LINEAR)
+        pred_entropy = np.copy(pred_entropy)
+        pred_entropy[:, :, 0] = pred_entropy[:, :, 0] - 2*math.log(w) + 2*math.log(W)
+        pred_entropy[:, :, 1] = pred_entropy[:, :, 1] - 2*math.log(h) + 2*math.log(H)
+        pred_entropy = cv2.resize(pred_entropy, (W, H), interpolation=cv2.INTER_LINEAR)
 
         # Calculate sparsification plots
         epe_map = np.sqrt(np.sum(np.square(flo_pred[:, :, :2] - gt_flow[:, :, :2]), axis=2))
-        entropy_map = np.sum(pred_logvar[:, :, :2], axis=2)
+        entropy_map = np.sum(pred_entropy[:, :, :2], axis=2)
         splot = sp_plot(epe_map, entropy_map)
         oplot = sp_plot(epe_map, epe_map)     # Oracle
 

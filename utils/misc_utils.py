@@ -1,6 +1,7 @@
 import collections
 import io
 import numpy as np
+import torch
 
 
 def update_dict(orig_dict, new_dict):
@@ -62,4 +63,66 @@ def matplot_fig_to_numpy(fig):
     im = data.reshape((int(h), int(w), -1))
     return im
 
+
+def log_sum_exp(x, w=1, dim=0):
+    x_max, _ = torch.max(x, dim=dim, keepdim=True)
+    return x_max + torch.log(torch.sum(w * torch.exp(x - x_max), dim=dim, keepdim=True))
+
+
+def gaussian_mixture_log_pdf(flow, mean, log_std, per_pixel=False):
+    nsamples = flow.size(0) // mean.size(0)
+    K = mean.size(1) // 2
+    mean = mean.repeat(nsamples, 1, 1, 1)
+    log_std = log_std.repeat(nsamples, 1, 1, 1)
+    diag = torch.exp(log_std)
+
+    # vertical component
+    u_err = (flow[:, [0]] - mean[:, 0:K])[:, None] / diag[:, [0]]    # (nsamples * batch_size, K, rows, cols)
+    u_err_sq = u_err*u_err
+    log_det_u = log_std[:, [0]]
+    if not per_pixel:
+        u_err_sq = torch.mean(u_err_sq, dim=(2, 3))              # (nsamples * batch_size, 1)
+        log_det_u = torch.mean(log_det_u, dim=(2, 3))             # (nsamples * batch_size, 1)
+
+    # (nsamples * batch_size, 1) or (nsamples*batch_size, 1, rows, cols)
+    log_pdf_u = log_sum_exp(-log_det_u - (np.log(2*torch.pi) + u_err_sq) / 2, 1, dim=1)
+
+    # horizontal component
+    v_err = (flow[:, [1]] - mean[:, K:2*K])[:, None] / diag[:, [1]]  # (nsamples * batch_size, K, rows, cols)
+    v_err_sq = v_err*v_err
+    log_det_v = log_std[:, [1]]
+    if not per_pixel:
+        v_err_sq = torch.mean(v_err_sq, dim=(2, 3))              # (nsamples * batch_size, 1)
+        log_det_v = torch.mean(log_det_v, dim=(2,3))             # (nsamples * batch_size, 1)
+
+    # (nsamples * batch_size, 1) or (nsamples*batch_size, 1, rows, cols)
+    log_pdf_v = log_sum_exp(-log_det_v - (np.log(2*torch.pi) + v_err_sq) / 2, 1, dim=1)
+
+    return torch.cat((log_pdf_u, log_pdf_v), dim=1)             # (nsamples * batch_size, 2) or (nsamples*batch_size, 2, rows, cols)
+
+
+def mixture_entropy(mean, log_std, n_samples=100):
+    Normal = torch.distributions.Normal(0, 1)
+    if torch.cuda.is_available():
+        Normal.loc = Normal.loc.cuda()  # hack to get sampling on the GPU
+        Normal.scale = Normal.scale.cuda()
+
+    def sample(mean, std):
+        K = mean.size(1) // 2
+        zu = torch.randint(0, K, size=[1])
+        zv = torch.randint(K, 2 * K, size=[1])
+        # Batches change fast, samples slow (to be consistent with the means array)
+        mean_u = mean[:, zu]
+        mean_v = mean[:, zv]
+        mean = torch.cat((mean_u, mean_v), dim=1)
+        z = mean + std * Normal.sample(std.size())
+        return z
+
+    std = torch.exp(log_std)
+    entropy = torch.zeros_like(mean)
+    for i in range(n_samples):
+        flow = sample(mean, std)
+        entropy += gaussian_mixture_log_pdf(flow, mean, log_std, per_pixel=True)
+
+    return entropy / n_samples
 

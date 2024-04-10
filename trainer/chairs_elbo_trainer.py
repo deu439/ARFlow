@@ -1,10 +1,12 @@
+import copy
 import time
 import torch
 from .base_trainer import BaseTrainer
 from utils.flow_utils import evaluate_flow, torch_flow2rgb, evaluate_uncertainty
-from utils.misc_utils import AverageMeter, matplot_fig_to_numpy
+from utils.misc_utils import AverageMeter, matplot_fig_to_numpy, mixture_entropy
 import matplotlib.pyplot as plt
 import numpy as np
+from collections import defaultdict
 
 
 class TrainFramework(BaseTrainer):
@@ -22,6 +24,11 @@ class TrainFramework(BaseTrainer):
 
         self.model.train()
         end = time.time()
+
+        # Initialize model and optimizer state
+        #model_state = copy.deepcopy(self.model.state_dict())
+        #optimizer_state = copy.deepcopy(self.optimizer.state_dict())
+        low_lr = 0
 
         if 'stage1' in self.cfg:
             if self.i_epoch == self.cfg.stage1.epoch:
@@ -47,6 +54,34 @@ class TrainFramework(BaseTrainer):
             # update meters
             key_meters.update([loss.item(), l_ph.item(), l_sm.item(), entropy.item(), inv_l1norm],
                               img_pair.size(0))
+
+            # If large l1norm is detected, use lower learning rate
+            # if inv_l1norm > 100.0:
+            #     if low_lr == 0:
+            #         self._log.info("inv_l1norm > 100.0, setting learning rate to 1e-6.")
+            #         for g in self.optimizer.param_groups:
+            #             g['lr'] = 1e-6
+            #
+            #     low_lr = 100
+            #
+            # if low_lr > 1:
+            #     low_lr = low_lr - 1
+            # elif low_lr == 1:
+            #     self._log.info("inv_l1norm < 10.0, setting learning rate back to {}".format(self.cfg.lr))
+            #    for g in self.optimizer.param_groups:
+            #        g['lr'] = self.cfg.lr
+            #    low_lr = 0
+
+            # if nan is encountered, revert the last step and continue training
+            #if np.isnan(loss.item()):
+            #    self.model.load_state_dict(model_state)
+            #    self.optimizer.__setstate__({'state': defaultdict(dict)})
+            #    #self.optimizer.load_state_dict(optimizer_state)
+            #    continue
+
+            # store model and optimizer state before making the next step
+            #model_state = copy.deepcopy(self.model.state_dict())
+            #optimizer_state = copy.deepcopy(self.optimizer.state_dict())
 
             # compute gradient and do optimization step
             self.optimizer.zero_grad()
@@ -99,7 +134,7 @@ class TrainFramework(BaseTrainer):
         n_step = 0
         for i_set, loader in enumerate(self.valid_loader):
             error_names = ['Loss', 'l_ph', 'l_sm', 'entropy', 'inv_l1norm', 'EPE']
-            if not self.loss_func.cfg.inv_cov:
+            if self.cfg.track_auc:
                 error_names += ['AUC', 'AUC_diff']
             error_meters = AverageMeter(i=len(error_names))
             splots = []
@@ -127,9 +162,18 @@ class TrainFramework(BaseTrainer):
                 error_values += es
 
                 # Evaluate AUC
-                if self.loss_func.cfg.approx == 'diag' and not self.loss_func.cfg.inv_cov:
-                    pred_logvars = flows[0][:, 2:4].detach().cpu().numpy().transpose([0, 2, 3, 1])
-                    auc, splot, oplot = evaluate_uncertainty(gt_flows, pred_flows, pred_logvars, sp_samples=self.cfg.sp_samples)
+                if self.loss_func.cfg.approx == 'diag' and self.cfg.track_auc:
+                    pred_entropies = flows[0][:, 2:4]
+
+                if self.loss_func.cfg.approx == 'mixture' and self.cfg.track_auc:
+                    K = self.loss_func.cfg.n_components
+                    mean = flows[0][:, 0:K*2]
+                    pred_logstd = flows[0][:, K*2:K*2+2]
+                    pred_entropies = mixture_entropy(mean, pred_logstd, n_samples=100)
+
+                if self.cfg.track_auc:
+                    pred_entropies = pred_entropies.detach().cpu().numpy().transpose([0, 2, 3, 1])
+                    auc, splot, oplot = evaluate_uncertainty(gt_flows, pred_flows, pred_entropies, sp_samples=self.cfg.sp_samples)
                     splots += splot
                     oplots += oplot
                     error_values += auc
@@ -156,18 +200,23 @@ class TrainFramework(BaseTrainer):
                     'Valid_{}_{}'.format(name, i_set), value, self.i_epoch)
 
             # Record output tensor
-            torch.save(flows[2], self.save_root / 'flow_fw_l2_{}.pt'.format(self.i_epoch))
+            #torch.save(flows[2], self.save_root / 'flow_fw_l2_{}.pt'.format(self.i_epoch))
 
             # write predicted and true flow to tboard
             gt_flow = data['target']['flow']
             image = torch_flow2rgb(gt_flow.cpu())
             self.summary_writer.add_images("Valid/gt_{}".format(i_set), image, self.i_epoch)
-            image = torch_flow2rgb(flows[0][:, 0:2].cpu())
-            self.summary_writer.add_images("Valid/pred_{}".format(i_set), image, self.i_epoch)
-            entropy = torch.sum(flows[0][:, 2:4], axis=1, keepdim=True)
-            entropy -= torch.min(entropy)
-            entropy /= torch.max(entropy)
-            self.summary_writer.add_images("Valid/entropy_{}".format(i_set), entropy.cpu(), self.i_epoch, dataformats='NCHW')
+
+            out_channels = self.model.cfg.out_channels
+            for flow_pair in range(out_channels[0] // 2):
+                image = torch_flow2rgb(flows[0][:, 2*flow_pair:2*(flow_pair+1)].cpu())
+                self.summary_writer.add_images("Valid/pred_{}_{}".format(i_set, flow_pair), image, self.i_epoch)
+
+            for comp in range(out_channels[1] // 2):
+                entropy = torch.sum(flows[0][:, 2*out_channels[0] + 2*comp:2*out_channels[0] + 2*(comp+1)], axis=1, keepdim=True)
+                entropy -= torch.min(entropy)
+                entropy /= torch.max(entropy)
+                self.summary_writer.add_images("Valid/entropy_{}_{}".format(i_set, comp), entropy.cpu(), self.i_epoch, dataformats='NCHW')
 
             # write sparsification plots to tboard
             if len(splots) > 0 and len(oplots) > 0:

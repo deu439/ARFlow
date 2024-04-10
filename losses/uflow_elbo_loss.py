@@ -9,6 +9,7 @@ import math
 
 from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_invalid, census_loss_no_penalty, image_grads, robust_l1, abs_robust_loss, upsample, ssim_loss, charbonnier
 from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product, matrix_vector_product_T, NaturalGradientIdentityT, NaturalGradientIdentityC
+from utils.misc_utils import gaussian_mixture_log_pdf
 
 
 def log_gmm(x, pi, beta):
@@ -18,11 +19,6 @@ def log_gmm(x, pi, beta):
     w = pi * torch.sqrt(beta) / math.sqrt(2 * torch.pi)
     c = torch.max(arg, dim=-1).values
     return c + torch.log(torch.sum(w * torch.exp(arg - c.unsqueeze(-1)), dim=-1))
-
-
-def log_sum_exp(x, w=1, dim=0):
-    x_max, _ = torch.max(x, dim=dim)
-    return x_max + torch.log(torch.sum(w * torch.exp(x - x_max.unsqueeze(-1)), dim=dim))
 
 
 class SlowDownIdentity(Function):
@@ -88,50 +84,24 @@ class UFlowElboLoss(nn.modules.Module):
         z = mean + BackwardSubst.apply(diag, left, over, eps)
         return z
 
-    def reparam_gmm(self, mean, diag, nsamples=1):
+    def reparam_gmm(self, mean, std, nsamples=1):
         """
-        Generates normal distributed samples with a given mean and variance.
-        mean: mean - tensor of size (batch, 2, height, width)
-        log_diag: log(variance)/2=log(std) - tensor of size (batch, 2, height, width)
-        returns: samples - tensor of size (Nsamples*batch, 2, height, width)
+        Generates gaussian mixture distributed samples with a given mean and variance.
+        mean: mean - tensor of size (batch, 2*K, height, width)
+        std: standard deviation - tensor of size (batch, 2, height, width)
+        returns: samples - tensor of size (nsamples*batch, 2, height, width)
         """
         K = self.cfg.n_components
         rows, cols = mean.shape[2:]
-        mean = mean.repeat(nsamples, 1, 1, 1)
+        std = std.repeat(nsamples, 1, 1, 1)
         zu = torch.randint(0, K, size=[nsamples])
         zv = torch.randint(K, 2*K, size=[nsamples])
-        # Batches change fast, samples slow (to be consistent with the means array)
-        diag_u = diag[:, zu].transpose(1,0).reshape(-1, 1, rows, cols)
-        diag_v = diag[:, zv].transpose(1,0).reshape(-1, 1, rows, cols)
-        diag = torch.cat((diag_u, diag_v), dim=1)
-        z = mean + diag * self.Normal.sample(mean.size())
+        # Batches change fast, samples slow (to be consistent with the diag array)
+        mean_u = mean[:, zu].transpose(1,0).reshape(-1, 1, rows, cols)
+        mean_v = mean[:, zv].transpose(1,0).reshape(-1, 1, rows, cols)
+        mean = torch.cat((mean_u, mean_v), dim=1)
+        z = mean + std * self.Normal.sample(std.size())
         return z
-
-    def gaussian_mixture_log_pdf(self, flow, mean, log_diag):
-        nsamples = int(flow.size(0) / mean.size(0))
-        K = self.cfg.n_components
-        mean = mean.repeat(nsamples, 1, 1, 1)
-        log_diag = log_diag.repeat(nsamples, 1, 1, 1)
-        diag = torch.exp(log_diag)
-
-        # vertical component
-        u_err = (flow[:, 0] - mean[:, 0])[:, None] / diag[:, 0:K]     # (nsamples * batch_size, K, rows, cols)
-        u_sum_sq = torch.sum(u_err*u_err, dim=(2, 3))                 # (nsamples * batch_size, K)
-        log_det_u = torch.sum(log_diag[:, 0:K], dim=(2,3))            # (nsamples * batch_size, K)
-        #det_u = torch.prod(diag[:, 0:K], dim=-1)                      # (nsamples * batch_size, K, rows)
-        #det_u = torch.prod(det_u, dim=-1)                             # (nsamples * batch_size, K)
-        log_pdf_u = log_sum_exp(-log_det_u - u_sum_sq / 2, 1, dim=1)        # (nsamples * batch_size)
-
-        # horizontal component
-        v_err = (flow[:, 1] - mean[:, 1])[:, None] / diag[:, K:2*K]   # (nsamples * batch_size, K, rows, cols)
-        v_sum_sq = torch.sum(v_err*v_err, dim=(2, 3))                 # (nsamples * batch_size, K)
-        log_det_v = torch.sum(log_diag[:, K:2*K], dim=(2,3))          # (nsamples * batch_size, K)
-        #det_v = torch.prod(diag[:, K:2*K], dim=-1)                    # (nsamples * batch_size, K, rows)
-        #det_v = torch.prod(det_v, dim=-1)                             # (nsamples * batch_size, K)
-        log_pdf_v = log_sum_exp(-log_det_v - v_sum_sq / 2, 1, dim=1)        # (nsamples * batch_size)
-
-        return log_pdf_u + log_pdf_v
-
 
     def data_loss_no_penalty(self, im1_0, im2_0, flow12_2, flow21_2, mean12_2=None, mean21_2=None):
         """
@@ -248,10 +218,10 @@ class UFlowElboLoss(nn.modules.Module):
 
         elif self.cfg.approx == 'mixture':
             K = self.cfg.n_components
-            mean12_2 = output[2][:, 0:2]
-            log_diag12_2 = output[2][:, 2:2+2*K]
-            mean21_2 = output[2][:, 2+2*K:4+2*K]
-            log_diag21_2 = output[2][:, 4+2*K:4+4*K]
+            mean12_2 = output[2][:, 0:2*K]
+            log_diag12_2 = output[2][:, 2*K:2*K+2]
+            mean21_2 = output[2][:, 2*K+2:4*K+2]
+            log_diag21_2 = output[2][:, 4*K+2:4*K+4]
             diag12_2 = torch.exp(log_diag12_2)
             diag21_2 = torch.exp(log_diag21_2)
             #print("mean, var:", torch.mean(log_diag12_2), torch.std(log_diag12_2))
@@ -368,9 +338,9 @@ class UFlowElboLoss(nn.modules.Module):
                 if self.cfg.with_bk:
                     loss_entropy -= self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
         elif self.cfg.approx == 'mixture':
-            loss_entropy = -self.cfg.w_entropy * self.gaussian_mixture_log_pdf(flow12_2, mean12_2, log_diag12_2).mean()
+            loss_entropy = -self.cfg.w_entropy * gaussian_mixture_log_pdf(flow12_2, mean12_2, log_diag12_2).sum(dim=1).mean()
             if self.cfg.with_bk:
-                loss_entropy -= self.cfg.w_entropy * self.gaussian_mixture_log_pdf(flow21_2, mean21_2, log_diag21_2).mean()
+                loss_entropy -= self.cfg.w_entropy * gaussian_mixture_log_pdf(flow21_2, mean21_2, log_diag21_2).sum(dim=1).mean()
 
         # Data loss on level 0 #
         ########################
