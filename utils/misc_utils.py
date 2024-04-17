@@ -71,34 +71,31 @@ def log_sum_exp(x, w=1, dim=0):
 
 def gaussian_mixture_log_pdf(flow, mean, log_std, per_pixel=False):
     nsamples = flow.size(0) // mean.size(0)
-    K = mean.size(1) // 2
     mean = mean.repeat(nsamples, 1, 1, 1)
     log_std = log_std.repeat(nsamples, 1, 1, 1)
-    diag = torch.exp(log_std)
+    std = torch.exp(log_std)
 
     # vertical component
-    u_err = (flow[:, [0]] - mean[:, 0:K])[:, None] / diag[:, [0]]    # (nsamples * batch_size, K, rows, cols)
+    u_err = (flow[:, [0]] - mean[:, 0::2]) / std[:, [0]]    # (nsamples * batch_size, K, rows, cols)
     u_err_sq = u_err*u_err
     log_det_u = log_std[:, [0]]
-    if not per_pixel:
-        u_err_sq = torch.mean(u_err_sq, dim=(2, 3))              # (nsamples * batch_size, 1)
-        log_det_u = torch.mean(log_det_u, dim=(2, 3))             # (nsamples * batch_size, 1)
-
-    # (nsamples * batch_size, 1) or (nsamples*batch_size, 1, rows, cols)
-    log_pdf_u = log_sum_exp(-log_det_u - (np.log(2*torch.pi) + u_err_sq) / 2, 1, dim=1)
 
     # horizontal component
-    v_err = (flow[:, [1]] - mean[:, K:2*K])[:, None] / diag[:, [1]]  # (nsamples * batch_size, K, rows, cols)
+    v_err = (flow[:, [1]] - mean[:, 1::2]) / std[:, [1]]  # (nsamples * batch_size, K, rows, cols)
     v_err_sq = v_err*v_err
     log_det_v = log_std[:, [1]]
+
+    err_sq = u_err_sq + v_err_sq
+    log_det = log_det_u + log_det_v
+
     if not per_pixel:
-        v_err_sq = torch.mean(v_err_sq, dim=(2, 3))              # (nsamples * batch_size, 1)
-        log_det_v = torch.mean(log_det_v, dim=(2,3))             # (nsamples * batch_size, 1)
+        err_sq = torch.mean(err_sq, dim=(2, 3))              # (nsamples * batch_size, 1)
+        log_det = torch.mean(log_det, dim=(2, 3))            # (nsamples * batch_size, 1)
 
     # (nsamples * batch_size, 1) or (nsamples*batch_size, 1, rows, cols)
-    log_pdf_v = log_sum_exp(-log_det_v - (np.log(2*torch.pi) + v_err_sq) / 2, 1, dim=1)
+    log_pdf = log_sum_exp(-log_det - err_sq / 2, 1, dim=1)
 
-    return torch.cat((log_pdf_u, log_pdf_v), dim=1)             # (nsamples * batch_size, 2) or (nsamples*batch_size, 2, rows, cols)
+    return log_pdf  # (nsamples * batch_size, 1) or (nsamples*batch_size, 1, rows, cols)
 
 
 def mixture_entropy(mean, log_std, n_samples=100):

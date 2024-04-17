@@ -94,11 +94,10 @@ class UFlowElboLoss(nn.modules.Module):
         K = self.cfg.n_components
         rows, cols = mean.shape[2:]
         std = std.repeat(nsamples, 1, 1, 1)
-        zu = torch.randint(0, K, size=[nsamples])
-        zv = torch.randint(K, 2*K, size=[nsamples])
+        z = torch.randint(0, K, size=[nsamples])
         # Batches change fast, samples slow (to be consistent with the diag array)
-        mean_u = mean[:, zu].transpose(1,0).reshape(-1, 1, rows, cols)
-        mean_v = mean[:, zv].transpose(1,0).reshape(-1, 1, rows, cols)
+        mean_u = mean[:, 2*z].transpose(1,0).reshape(-1, 1, rows, cols)
+        mean_v = mean[:, 2*z+1].transpose(1,0).reshape(-1, 1, rows, cols)
         mean = torch.cat((mean_u, mean_v), dim=1)
         z = mean + std * self.Normal.sample(std.size())
         return z
@@ -338,9 +337,9 @@ class UFlowElboLoss(nn.modules.Module):
                 if self.cfg.with_bk:
                     loss_entropy -= self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
         elif self.cfg.approx == 'mixture':
-            loss_entropy = -self.cfg.w_entropy * gaussian_mixture_log_pdf(flow12_2, mean12_2, log_diag12_2).sum(dim=1).mean()
+            loss_entropy = -self.cfg.w_entropy * gaussian_mixture_log_pdf(flow12_2, mean12_2, log_diag12_2).mean()
             if self.cfg.with_bk:
-                loss_entropy -= self.cfg.w_entropy * gaussian_mixture_log_pdf(flow21_2, mean21_2, log_diag21_2).sum(dim=1).mean()
+                loss_entropy -= self.cfg.w_entropy * gaussian_mixture_log_pdf(flow21_2, mean21_2, log_diag21_2).mean()
 
         # Data loss on level 0 #
         ########################
