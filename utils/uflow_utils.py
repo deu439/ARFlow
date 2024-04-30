@@ -233,9 +233,9 @@ def downsample(img, is_flow, scale_factor=2.0, align_corners=False):
 
 
 def image_grads(image_batch, stride=1):
-    image_batch_gh = image_batch[:, :, stride:] - image_batch[:, :, :-stride]
-    image_batch_gw = image_batch[:, :, :, stride:] - image_batch[:, :, :, :-stride]
-    return image_batch_gh, image_batch_gw
+    image_batch_x = image_batch[:, :, :, stride:] - image_batch[:, :, :, :-stride]
+    image_batch_y = image_batch[:, :, stride:] - image_batch[:, :, :-stride]
+    return image_batch_x, image_batch_y
 
 
 def robust_l1(x):
