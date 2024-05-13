@@ -38,22 +38,21 @@ class TrainFramework(BaseTrainer):
             if i_step > self.cfg.epoch_size:
                 break
             # read data to device
-            img1, img2 = data['img1'], data['img2']
-            img_pair = torch.cat([img1, img2], 1).to(self.device)
+            img1, img2 = data['img1'].to(self.device), data['img2'].to(self.device)
+            #img_pair = torch.cat([img1, img2], 1).to(self.device)
 
             # measure data loading time
             am_data_time.update(time.time() - end)
 
             # compute output
-            res_dict = self.model(img_pair, with_bk=True)
-            flows_12, flows_21 = res_dict['flows_fw'], res_dict['flows_bw']
-            flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
-                     zip(flows_12, flows_21)]
-            loss, l_ph, l_sm, entropy, inv_l1norm = self.loss_func(flows, img_pair)
+            res_dict = self.model(img1, img2, with_bk=True)
+            #flows_12, flows_21 = res_dict['flows_fw'], res_dict['flows_bw']
+            #flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
+            #         zip(flows_12, flows_21)]
+            loss, l_ph, l_sm, entropy, inv_l1norm = self.loss_func(res_dict, img1, img2)
 
             # update meters
-            key_meters.update([loss.item(), l_ph.item(), l_sm.item(), entropy.item(), inv_l1norm],
-                              img_pair.size(0))
+            key_meters.update([loss.item(), l_ph.item(), l_sm.item(), entropy.item(), inv_l1norm], img1.size(0))
 
             # If large l1norm is detected, use lower learning rate
             # if inv_l1norm > 100.0:
@@ -141,18 +140,18 @@ class TrainFramework(BaseTrainer):
             oplots = []
 
             for i_step, data in enumerate(loader):
-                img1, img2 = data['img1'], data['img2']
-                img_pair = torch.cat([img1, img2], 1).to(self.device)
+                img1, img2 = data['img1'].to(self.device), data['img2'].to(self.device)
+                #img_pair = torch.cat([img1, img2], 1).to(self.device)
                 gt_flows = data['target']['flow'].numpy().transpose([0, 2, 3, 1])
 
                 # Compute output
-                res_dict = self.model(img_pair)
+                res_dict = self.model(img1, img2)
 
                 # Evaluate loss
-                flows_12, flows_21 = res_dict['flows_fw'], res_dict['flows_bw']
-                flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
-                         zip(flows_12, flows_21)]
-                loss, l_ph, l_sm, entropy, inv_l1norm = self.loss_func(flows, img_pair)
+                #flows_12, flows_21 = res_dict['flows_fw'], res_dict['flows_bw']
+                #flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
+                #         zip(flows_12, flows_21)]
+                loss, l_ph, l_sm, entropy, inv_l1norm = self.loss_func(res_dict, img1, img2)
                 error_values = [loss, l_ph, l_sm, entropy, inv_l1norm]
 
                 # Evaluate endpoint error
@@ -179,7 +178,7 @@ class TrainFramework(BaseTrainer):
                     error_values += auc
 
                 # Update error meters
-                error_meters.update(error_values, img_pair.size(0))
+                error_meters.update(error_values, img1.size(0))
 
                 # measure elapsed time
                 batch_time.update(time.time() - end)
@@ -200,7 +199,7 @@ class TrainFramework(BaseTrainer):
                     'Valid_{}_{}'.format(name, i_set), value, self.i_epoch)
 
             # Record output tensor
-            #torch.save(flows[2], self.save_root / 'flow_fw_l2_{}.pt'.format(self.i_epoch))
+            torch.save(flows[2], self.save_root / 'flow_fw_l2_{}.pt'.format(self.i_epoch))
 
             # write predicted and true flow to tboard
             gt_flow = data['target']['flow']
@@ -213,7 +212,7 @@ class TrainFramework(BaseTrainer):
                 self.summary_writer.add_images("Valid/pred_{}_{}".format(i_set, flow_pair), image, self.i_epoch)
 
             for comp in range(out_channels[1] // 2):
-                entropy = torch.sum(flows[0][:, 2*out_channels[0] + 2*comp:2*out_channels[0] + 2*(comp+1)], axis=1, keepdim=True)
+                entropy = torch.sum(flows[0][:, out_channels[0] + 2*comp:out_channels[0] + 2*(comp+1)], axis=1, keepdim=True)
                 entropy -= torch.min(entropy)
                 entropy /= torch.max(entropy)
                 self.summary_writer.add_images("Valid/entropy_{}_{}".format(i_set, comp), entropy.cpu(), self.i_epoch, dataformats='NCHW')

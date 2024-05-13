@@ -2,7 +2,7 @@ from .pwclite import PWCLite
 from .pwclite_prob import PWCLiteProb
 from .pwclite_uflow import PWCLiteUflow
 from .uflow_model import PWCFlow
-from .uflow_prob_model import PWCProbFlow
+from .uflow_prob_model import PWCProbFlow, ComponentNet
 from .flownet_probout import FlowNetProbOut
 
 
@@ -19,6 +19,8 @@ def get_model(cfg):
         model = PWCProbFlow(cfg)
     elif cfg.type == 'flownet_prob':
         model = FlowNetProbOut(cfg)
+    elif cfg.type == 'component':
+        model = ComponentNet(cfg)
     else:
         raise NotImplementedError(cfg.type)
     return model
