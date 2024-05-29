@@ -99,8 +99,8 @@ def flows_concat(flow1, flow2):
     out_list = []
     for level in range(len(flow1)):
         mean = torch.concatenate((flow1[level][:, 0:2], flow2[level][:, 0:2]), dim=1)
-        #log_diag = torch.concatenate((flow1[level][:, 2:4], flow2[level][:, 2:4]), dim=1)
-        log_diag = flow1[level][:, 2:4]     # Share the variance
+        log_diag = torch.concatenate((flow1[level][:, 2:4], flow2[level][:, 2:4]), dim=1)
+        #log_diag = flow1[level][:, 2:4]     # Share the variance
         out_list.append(torch.concatenate((mean, log_diag), dim=1))
 
     return out_list
@@ -110,21 +110,36 @@ class ComponentNet(nn.Module):
     def __init__(self, cfg):
         super(ComponentNet, self).__init__()
         self.cfg = cfg
+        self.mixture_weights = cfg.mixture_weights
+        self.out_channels = cfg.out_channels
         cfg1 = EasyDict(cfg.copy())
         cfg1.out_channels = [2, 2, 0]
+        cfg1.mixture_weights = False
+        cfg1.n_pyramids = 1
         cfg2 = EasyDict(cfg.copy())
-        cfg2.out_channels = [2, 0, 0]   # Share the variance
+        cfg2.mixture_weights = False
+        cfg2.out_channels = [2, 2, 0]   # Share the variance
+        cfg2.n_pyramids = 1
         self.pwcnet1 = PWCProbFlow(cfg1)
         self.pwcnet2 = PWCProbFlow(cfg2)
 
+        if cfg.mixture_weights:
+            self.mixture_weights_net = MixtureWeightsNet(cfg)
+
     def forward(self, img1, img2, with_bk=True):
-        out_dict1 = self.pwcnet1(img1, img2, with_bk=with_bk)
-        out_dict2 = self.pwcnet2(img1, img2, with_bk=with_bk)
+        res_dict1 = self.pwcnet1(img1, img2, with_bk=with_bk)
+        res_dict2 = self.pwcnet2(img1, img2, with_bk=with_bk)
 
-        out_dict = {'flows_fw': flows_concat(out_dict1['flows_fw'], out_dict2['flows_fw']),
-                    'flows_bw': flows_concat(out_dict1['flows_bw'], out_dict2['flows_bw'])}
+        res_dict = {'flows_fw': flows_concat(res_dict1['flows_fw'], res_dict2['flows_fw']),
+                    'flows_bw': flows_concat(res_dict1['flows_bw'], res_dict2['flows_bw'])}
 
-        return out_dict
+        if self.mixture_weights:
+            mean12_2 = res_dict['flows_fw'][2][:, 0:self.out_channels[0] * self.cfg.n_pyramids]
+            mean21_2 = res_dict['flows_bw'][2][:, 0:self.out_channels[0] * self.cfg.n_pyramids]
+            res_dict['weights_fw'] = self.mixture_weights_net(mean12_2, mean21_2, img1, img2)
+            res_dict['weights_bw'] = self.mixture_weights_net(mean21_2, mean12_2, img2, img1)
+
+        return res_dict
 
     def init_weights(self):
         self.pwcnet1.init_weights()
@@ -169,7 +184,22 @@ class PWCProbFlow(nn.Module):
         if self._mixture_weights:
             self._mixture_weights_net = MixtureWeightsNet(cfg)
 
-        self._feature_pyramid_extractor = PWCFeaturePyramid(num_components=self._out_channels[0] // 2)
+        # One feature pyramid for each component
+        self._feature_pyramid_extractor = nn.ModuleList([PWCFeaturePyramid() for k in range(cfg.n_pyramids)])
+
+    def flows_cat(self, input_list):
+        out_list = []
+        n_levels = len(input_list[0])
+        for level in range(n_levels):
+            mean = torch.cat(
+                [flow[level][:, 0:self._out_channels[0]] for flow in input_list], dim=1
+            )
+            log_diag = torch.cat(
+                [flow[level][:, self._out_channels[0]:self._out_channels[0]+self._out_channels[1]] for flow in input_list], dim=1
+            )
+            out_list.append(torch.concatenate((mean, log_diag), dim=1))
+
+        return out_list
 
     def init_weights(self):
         for layer in self.named_modules():
@@ -214,30 +244,30 @@ class PWCProbFlow(nn.Module):
 
             # Initialize for coarsest level
             if out_up is None:
-                batch_size, _, height, width = list(features1[0].shape)
-                flow_up = torch.zeros([batch_size, self._out_channels[0], height, width], device=features1[0].device)
+                batch_size, _, height, width = list(features1.shape)
+                flow_up = torch.zeros([batch_size, self._out_channels[0], height, width], device=features1.device)
                 # Start at log_diag ~ 0.0 at level 2 (the output level)
                 log_diag_up = -(self._num_levels-3) * self._diag_bias \
-                              * torch.ones([batch_size, self._out_channels[1], height, width], device=features1[0].device)
+                              * torch.ones([batch_size, self._out_channels[1], height, width], device=features1.device)
                 out_up = torch.cat([flow_up, log_diag_up], dim=1)
 
                 if self._num_context_up_channels:
                     num_channels = int(self._num_context_up_channels * self._channel_multiplier)
-                    context_up = torch.zeros([batch_size, num_channels, height, width]).to(features1[0].device)
+                    context_up = torch.zeros([batch_size, num_channels, height, width]).to(features1.device)
 
             # Compute cost volumes for each pair of optical flow channels
             cost_volume_list = []
             for k in range(self._out_channels[0] // 2):
                 # Warp features2 with upsampled flow from higher level.
                 if out_up is None or not self._use_feature_warp:
-                    warped2 = features2[k]
+                    warped2 = features2
                 else:
                     warp_up = uflow_utils.flow_to_warp(out_up[:, k*2:(k+1)*2])
-                    warped2 = uflow_utils.resample2(features2[k], warp_up)
+                    warped2 = uflow_utils.resample2(features2, warp_up)
 
                 # Compute cost volume by comparing features1 and warped features2.
                 features1_normalized, warped2_normalized = normalize_features(
-                    [features1[k], warped2],
+                    [features1, warped2],
                     normalize=self._normalize_before_cost_volume,
                     center=self._normalize_before_cost_volume,
                     moments_across_channels=True,
@@ -261,8 +291,7 @@ class PWCProbFlow(nn.Module):
                 features1 = conv_1x1(features1)
 
             # Compute context and flow from previous flow, cost volume, and features1.
-            # FIXME: shall we input also features1[1:K-1] ?
-            x_in = torch.cat([cost_volume, features1[0]], dim=1)
+            x_in = torch.cat([cost_volume, features1], dim=1)
             if out_up is not None:
                 x_in = torch.cat([out_up, x_in], dim=1)
             if context_up is not None:
@@ -343,21 +372,23 @@ class PWCProbFlow(nn.Module):
         return outs
 
     def forward(self, img1, img2, with_bk=True):
-        #n_frames = x.size(1) / 3
-        K = self._out_channels[0] // 2  # Number separate flow pairs
+        flows_fw = []
+        flows_bw = []
+        for k in range(self.cfg.n_pyramids):
+            feat1 = self._feature_pyramid_extractor[k](img1)
+            feat2 = self._feature_pyramid_extractor[k](img2)
 
-        #imgs = [x[:, 3 * i: 3 * i + 3] for i in range(int(n_frames))]
-        #x = [self._feature_pyramid_extractor(img) for img in imgs]
-        feat1 = self._feature_pyramid_extractor(img1)
-        feat2 = self._feature_pyramid_extractor(img2)
+            flows_fw.append(self.forward_2_frames(feat1, feat2))
+            if with_bk:
+                flows_bw.append(self.forward_2_frames(feat2, feat1))
 
-        res_dict = {'flows_fw': self.forward_2_frames(feat1, feat2)}
+        res_dict = {'flows_fw': self.flows_cat(flows_fw)}
         if with_bk:
-            res_dict['flows_bw'] = self.forward_2_frames(feat2, feat1)
+            res_dict['flows_bw'] = self.flows_cat(flows_bw)
 
         if self._mixture_weights:
-            mean12_2 = res_dict['flows_fw'][2][:, 0:2 * K]
-            mean21_2 = res_dict['flows_bw'][2][:, 0:2 * K]
+            mean12_2 = res_dict['flows_fw'][2][:, 0:self._out_channels[0] * self.cfg.n_pyramids]
+            mean21_2 = res_dict['flows_bw'][2][:, 0:self._out_channels[0] * self.cfg.n_pyramids]
             res_dict['weights_fw'] = self._mixture_weights_net(mean12_2, mean21_2, img1, img2)
             res_dict['weights_bw'] = self._mixture_weights_net(mean21_2, mean12_2, img2, img1)
 
@@ -398,8 +429,8 @@ class PWCProbFlow(nn.Module):
 
         for i in range(1, self._num_levels):
             layers = nn.ModuleList()
-            K = self._out_channels[0] // 2  # Number separate flow pairs
-            last_in_channels = (64+32) if not self._use_cost_volume else (K*81+32)
+            n_flows = self._out_channels[0] // 2  # Number separate flow pairs
+            last_in_channels = (64+32) if not self._use_cost_volume else (n_flows*81+32)
             # In contrast to UFlow we feed zero-flow and constant variance/precision at the fifth level input
             #if i != self._num_levels-1:
             last_in_channels += sum(self._out_channels[0:2]) + self._num_context_up_channels * self._channel_multiplier
@@ -481,8 +512,7 @@ class PWCFeaturePyramid(nn.Module):
                num_levels=5,
                channel_multiplier=1.,
                pyramid_resolution='half',
-               num_channels=3,
-               num_components=1):
+               num_channels=3):
     """Constructor.
 
     Args:
@@ -509,6 +539,7 @@ class PWCFeaturePyramid(nn.Module):
 
     super(PWCFeaturePyramid, self).__init__()
 
+    self._channel_multiplier = channel_multiplier
     if num_levels > 6:
       raise NotImplementedError('Max number of pyramid levels is 6')
     if filters is None:
@@ -526,8 +557,6 @@ class PWCFeaturePyramid(nn.Module):
     self._leaky_relu_alpha = leaky_relu_alpha
     self._convs = nn.ModuleList()
     self._level1_num_1x1 = level1_num_1x1
-    self._channel_multiplier = channel_multiplier
-    self._num_components = num_components
 
     c = num_channels
 
@@ -537,60 +566,38 @@ class PWCFeaturePyramid(nn.Module):
         stride = 1
         if i == 0 or (i == 1 and level == 0 and pyramid_resolution == 'quarter'):
           stride = 2
-
-        # Last layer is not shared across components
-        if i == num_layers-1:
-            conv = nn.ModuleList()
-            for k in range(self._num_components):
-                conv_k = nn.Conv2d(
-                    in_channels=c,
-                    out_channels=int(num_filters * self._channel_multiplier),
-                    kernel_size=(3, 3) if level > 0 or i < num_layers - level1_num_1x1 else (1, 1),
-                    stride=stride,
-                    padding='valid')
-                conv.append(conv_k)
-        else:
-            conv = nn.Conv2d(
-                in_channels=c,
-                out_channels=int(num_filters * self._channel_multiplier),
-                kernel_size=(3,3) if level > 0 or i < num_layers - level1_num_1x1 else (1, 1),
-                stride=stride,
-                padding='valid')
-
+        conv = nn.Conv2d(
+            in_channels=c,
+            out_channels=int(num_filters * self._channel_multiplier),
+            kernel_size=(3,3) if level > 0 or i < num_layers - level1_num_1x1 else (1, 1),
+            stride=stride,
+            padding='valid')
         group.append(conv)
         c = int(num_filters * self._channel_multiplier)
-
       self._convs.append(group)
 
-  def forward(self, imgs):
-    imgs = imgs * 2. - 1.  # Rescale input from [0,1] to [-1, 1]
-
+  def forward(self, x, split_features_by_sample=False):
+    x = x * 2. - 1.  # Rescale input from [0,1] to [-1, 1]
     features = []
-    for k in range(self._num_components):
+    for level, conv_tuple in enumerate(self._convs):
+      for i, conv in enumerate(conv_tuple):
+        if level > 0 or i < len(conv_tuple) - self._level1_num_1x1:
+          x = func.pad(
+              x,
+              pad=[1, 1, 1, 1],
+              mode='constant',
+              value=0)
+        x = conv(x)
+        x = func.leaky_relu(x, negative_slope=self._leaky_relu_alpha)
+      features.append(x)
 
-        x = torch.clone(imgs)   # Ensure the input images are not modified
-        features_k = []
-        for level, conv_tuple in enumerate(self._convs):
-          for i, conv in enumerate(conv_tuple):
-            if level > 0 or i < len(conv_tuple) - self._level1_num_1x1:
-              x = func.pad(
-                  x,
-                  pad=[1, 1, 1, 1],
-                  mode='constant',
-                  value=0)
+    if split_features_by_sample:
 
-            # Last layer is not shared across components
-            if i == len(conv_tuple)-1:
-                x = conv[k](x)
-            else:
-                x = conv(x)
-            x = func.leaky_relu(x, negative_slope=self._leaky_relu_alpha)
-          features_k.append(x)
+      # Split the list of features per level (for all samples) into a nested
+      # list that can be indexed by [sample][level].
 
-        features.append(features_k)
-
-    # Transpose such that level index goes first
-    features = list(zip(*features))
+      n = len(features[0])
+      features = [[f[i:i + 1] for f in features] for i in range(n)]  # pylint: disable=g-complex-comprehension
 
     return features
 
@@ -670,20 +677,19 @@ class MixtureWeightsNet(nn.Module):
     def __init__(self, cfg):
         super(MixtureWeightsNet, self).__init__()
         self.cfg = cfg
-        K = cfg.out_channels[0] // 2
-        self.resnet = ResNet(ResidualBlock, [2, 2, 2, 2], in_channels=K*8, num_classes=K)
+        self.n_flows = cfg.out_channels[0] // 2   # Number of components
+        self.K = self.n_flows * cfg.n_pyramids
+        self.resnet = ResNet(ResidualBlock, [2, 2, 2, 2], in_channels=self.K*8, num_classes=self.K)
 
     def forward(self, flow12_2, flow21_2, im1_0, im2_0):
-        K = flow12_2.size(1) // 2   # Number of components
-
         # Treat components as samples
         _, _, height, width = flow12_2.size()
         flow12_2 = flow12_2.reshape(-1, 2, height, width)
         flow21_2 = flow21_2.reshape(-1, 2, height, width)
 
         # Repeat the images accordingly
-        im1_0 = im1_0.repeat(K, 1, 1, 1)
-        im2_0 = im2_0.repeat(K, 1, 1, 1)
+        im1_0 = im1_0.repeat(self.K, 1, 1, 1)
+        im2_0 = im2_0.repeat(self.K, 1, 1, 1)
 
         # Compute per-pixel losses and weights
         data_pixel_loss12, data_pixel_weight12 = data_loss_no_penalty(
@@ -711,12 +717,12 @@ class MixtureWeightsNet(nn.Module):
         smooth_weight12_y = func.pad(smooth_weight12_y, (0, 0, 1, 0))
 
         # Treat components as channels again
-        data_pixel_loss12 = data_pixel_loss12.view(-1, K, height, width)
-        data_pixel_weight12 = data_pixel_weight12.view(-1, K, height, width)
-        smooth_loss12_x = smooth_loss12_x.view(-1, 2*K, height, width)
-        smooth_loss12_y = smooth_loss12_y.view(-1, 2*K, height, width)
-        smooth_weight12_x = smooth_weight12_x.view(-1, K, height, width)
-        smooth_weight12_y = smooth_weight12_y.view(-1, K, height, width)
+        data_pixel_loss12 = data_pixel_loss12.view(-1, self.K, height, width)
+        data_pixel_weight12 = data_pixel_weight12.view(-1, self.K, height, width)
+        smooth_loss12_x = smooth_loss12_x.view(-1, 2*self.K, height, width)
+        smooth_loss12_y = smooth_loss12_y.view(-1, 2*self.K, height, width)
+        smooth_weight12_x = smooth_weight12_x.view(-1, self.K, height, width)
+        smooth_weight12_y = smooth_weight12_y.view(-1, self.K, height, width)
 
         # Concatenate everything and pass to ResNet
         x = torch.cat([data_pixel_loss12, data_pixel_weight12, smooth_loss12_x, smooth_loss12_y,

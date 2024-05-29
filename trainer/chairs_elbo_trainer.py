@@ -1,4 +1,3 @@
-import copy
 import time
 import torch
 from .base_trainer import BaseTrainer
@@ -6,7 +5,7 @@ from utils.flow_utils import evaluate_flow, torch_flow2rgb, evaluate_uncertainty
 from utils.misc_utils import AverageMeter, matplot_fig_to_numpy, mixture_entropy
 import matplotlib.pyplot as plt
 import numpy as np
-from collections import defaultdict
+import PIL
 
 
 class TrainFramework(BaseTrainer):
@@ -206,16 +205,27 @@ class TrainFramework(BaseTrainer):
             image = torch_flow2rgb(gt_flow.cpu())
             self.summary_writer.add_images("Valid/gt_{}".format(i_set), image, self.i_epoch)
 
-            out_channels = self.model.cfg.out_channels
-            for flow_pair in range(out_channels[0] // 2):
-                image = torch_flow2rgb(flows[0][:, 2*flow_pair:2*(flow_pair+1)].cpu())
-                self.summary_writer.add_images("Valid/pred_{}_{}".format(i_set, flow_pair), image, self.i_epoch)
+            n_components = self.loss_func.cfg.n_components
+            for k in range(n_components):
+                image = torch_flow2rgb(flows[0][:, 2*k:2*(k+1)].detach().cpu())
+                image_np = image.numpy().transpose(0, 2, 3, 1)
+                image_np = (image_np * 255.0).astype(np.uint8)
 
-            for comp in range(out_channels[1] // 2):
-                entropy = torch.sum(flows[0][:, out_channels[0] + 2*comp:out_channels[0] + 2*(comp+1)], axis=1, keepdim=True)
+                # Print weight into the prediction
+                if 'weights_fw' in res_dict:
+                    for l in range(image.size(0)):
+                        weight = res_dict['weights_fw'][l, k].item()
+                        pimg = PIL.Image.fromarray(image_np[l])
+                        font = PIL.ImageFont.truetype('utils/DejaVuSansMono.ttf', 16)
+                        PIL.ImageDraw.Draw(pimg).text((4, 4), "{:.2f}".format(weight), (0, 0, 0), font)
+                        image_np[l] = np.array(pimg)
+
+                self.summary_writer.add_images("Valid/pred_{}_{}".format(i_set, k), image_np, self.i_epoch, dataformats='NHWC')
+
+                entropy = torch.sum(flows[0][:, 2*n_components+2*k:2*n_components+2*(k+1)], axis=1, keepdim=True)
                 entropy -= torch.min(entropy)
                 entropy /= torch.max(entropy)
-                self.summary_writer.add_images("Valid/entropy_{}_{}".format(i_set, comp), entropy.cpu(), self.i_epoch, dataformats='NCHW')
+                self.summary_writer.add_images("Valid/entropy_{}_{}".format(i_set, k), entropy.cpu(), self.i_epoch, dataformats='NCHW')
 
             # write sparsification plots to tboard
             if len(splots) > 0 and len(oplots) > 0:

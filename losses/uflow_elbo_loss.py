@@ -167,13 +167,15 @@ class UFlowElboLoss(nn.modules.Module):
         returns: samples - tensor of size (nsamples*batch, 2, height, width)
         """
         rows, cols = mean.shape[2:]
-        std = std.repeat(nsamples, 1, 1, 1)     # (batch*nsamples, 2, rows, cols)
         z = torch.multinomial(weights, num_samples=nsamples, replacement=True)      # (batch, nsamples)
         z = z[:, :, None, None].repeat(1, 1, rows, cols)                            # (batch, nsamples, rows, cols)
         # Batches change fast, samples slow (to be consistent with the diag array)
         mean_u = torch.gather(mean, 1, 2*z).transpose(1,0).reshape(-1, 1, rows, cols)    # (batch*nsamples, 1, rows, cols)
+        std_u = torch.gather(std, 1, 2*z).transpose(1,0).reshape(-1, 1, rows, cols)      # (batch*nsamples, 1, rows, cols)
         mean_v = torch.gather(mean, 1, 2*z+1).transpose(1,0).reshape(-1, 1, rows, cols)  # (batch*nsamples, 1, rows, cols)
+        std_v = torch.gather(std, 1, 2*z+1).transpose(1,0).reshape(-1, 1, rows, cols)      # (batch*nsamples, 1, rows, cols)
         mean = torch.cat((mean_u, mean_v), dim=1)
+        std = torch.cat((std_u, std_v), dim=1)
         z = mean + std * self.Normal.sample(std.size())
         return z
 
@@ -220,9 +222,9 @@ class UFlowElboLoss(nn.modules.Module):
         elif self.cfg.approx == 'mixture':
             K = self.cfg.n_components
             mean12_2 = res_dict['flows_fw'][2][:, 0:2*K]
-            log_diag12_2 = res_dict['flows_fw'][2][:, 2*K:2*K+2]
+            log_diag12_2 = res_dict['flows_fw'][2][:, 2*K:4*K]
             mean21_2 = res_dict['flows_bw'][2][:, 0:2*K]
-            log_diag21_2 = res_dict['flows_bw'][2][:, 2*K:2*K+2]
+            log_diag21_2 = res_dict['flows_bw'][2][:, 2*K:4*K]
             weights12 = torch.ones((mean12_2.size(0), K), device=mean12_2.device) / K
             weights21 = torch.ones((mean21_2.size(0), K), device=mean21_2.device) / K
             if 'weights_fw' in res_dict:

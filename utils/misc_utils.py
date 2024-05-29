@@ -77,14 +77,14 @@ def gaussian_mixture_log_pdf(flow, mean, log_std, weights, per_pixel=False):
     std = torch.exp(log_std)
 
     # vertical component
-    u_err = (flow[:, [0]] - mean[:, 0::2]) / std[:, [0]]    # (nsamples * batch_size, K, rows, cols)
+    u_err = (flow[:, [0]] - mean[:, 0::2]) / std[:, 0::2]    # (nsamples * batch_size, K, rows, cols)
     u_err_sq = u_err*u_err
-    log_det_u = log_std[:, [0]]         # (nsamples * batch_size, 1, rows, cols)
+    log_det_u = log_std[:, 0::2]         # (nsamples * batch_size, K, rows, cols)
 
     # horizontal component
-    v_err = (flow[:, [1]] - mean[:, 1::2]) / std[:, [1]]  # (nsamples * batch_size, K, rows, cols)
+    v_err = (flow[:, [1]] - mean[:, 1::2]) / std[:, 1::2]  # (nsamples * batch_size, K, rows, cols)
     v_err_sq = v_err*v_err
-    log_det_v = log_std[:, [1]]         # (nsamples * batch_size, 1, rows, cols)
+    log_det_v = log_std[:, 1::2]         # (nsamples * batch_size, K, rows, cols)
 
     err_sq = u_err_sq + v_err_sq
     log_det = log_det_u + log_det_v
@@ -94,7 +94,7 @@ def gaussian_mixture_log_pdf(flow, mean, log_std, weights, per_pixel=False):
 
     else:
         err_sq = torch.sum(err_sq, dim=(2, 3))              # (nsamples * batch_size, K)
-        log_det = torch.sum(log_det, dim=(2, 3))            # (nsamples * batch_size, 1)
+        log_det = torch.sum(log_det, dim=(2, 3))            # (nsamples * batch_size, K)
         rows, cols = flow.shape[2:]
         log_pdf = log_sum_exp(-log_det - err_sq / 2, weights, dim=1) / (rows * cols)
 
@@ -110,13 +110,15 @@ def mixture_entropy(mean, log_std, weights, n_samples=100):
     def sample(mean, std, weights):
         nsamples = 1
         rows, cols = mean.shape[2:]
-        std = std.repeat(nsamples, 1, 1, 1)     # (batch*nsamples, 2, rows, cols)
         z = torch.multinomial(weights, num_samples=nsamples, replacement=True)      # (batch, nsamples)
         z = z[:, :, None, None].repeat(1, 1, rows, cols)                            # (batch, nsamples, rows, cols)
         # Batches change fast, samples slow (to be consistent with the diag array)
         mean_u = torch.gather(mean, 1, 2*z).transpose(1,0).reshape(-1, 1, rows, cols)    # (batch*nsamples, 1, rows, cols)
+        std_u = torch.gather(std, 1, 2*z).transpose(1,0).reshape(-1, 1, rows, cols)      # (batch*nsamples, 1, rows, cols)
         mean_v = torch.gather(mean, 1, 2*z+1).transpose(1,0).reshape(-1, 1, rows, cols)  # (batch*nsamples, 1, rows, cols)
+        std_v = torch.gather(std, 1, 2*z+1).transpose(1,0).reshape(-1, 1, rows, cols)      # (batch*nsamples, 1, rows, cols)
         mean = torch.cat((mean_u, mean_v), dim=1)
+        std = torch.cat((std_u, std_v), dim=1)
         z = mean + std * Normal.sample(std.size())
         return z
 
