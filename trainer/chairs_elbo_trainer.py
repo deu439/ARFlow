@@ -3,9 +3,13 @@ import torch
 from .base_trainer import BaseTrainer
 from utils.flow_utils import evaluate_flow, torch_flow2rgb, evaluate_uncertainty
 from utils.misc_utils import AverageMeter, matplot_fig_to_numpy, mixture_entropy
+import utils.uflow_utils as uflow_utils
+from triag_solve_cuda import inverse_diagonal
+
 import matplotlib.pyplot as plt
 import numpy as np
 import PIL
+import math
 
 
 class TrainFramework(BaseTrainer):
@@ -48,7 +52,7 @@ class TrainFramework(BaseTrainer):
             #flows_12, flows_21 = res_dict['flows_fw'], res_dict['flows_bw']
             #flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
             #         zip(flows_12, flows_21)]
-            loss, l_ph, l_sm, entropy, inv_l1norm = self.loss_func(res_dict, img1, img2)
+            loss, l_ph, l_sm, entropy, inv_l1norm, _, _ = self.loss_func(res_dict, img1, img2)
 
             # update meters
             key_meters.update([loss.item(), l_ph.item(), l_sm.item(), entropy.item(), inv_l1norm], img1.size(0))
@@ -150,7 +154,7 @@ class TrainFramework(BaseTrainer):
                 #flows_12, flows_21 = res_dict['flows_fw'], res_dict['flows_bw']
                 #flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
                 #         zip(flows_12, flows_21)]
-                loss, l_ph, l_sm, entropy, inv_l1norm = self.loss_func(res_dict, img1, img2)
+                loss, l_ph, l_sm, entropy, inv_l1norm, sample_flows, sample_masks,  = self.loss_func(res_dict, img1, img2)
                 error_values = [loss, l_ph, l_sm, entropy, inv_l1norm]
 
                 # Evaluate endpoint error
@@ -168,6 +172,16 @@ class TrainFramework(BaseTrainer):
                     mean = flows[0][:, 0:K*2]
                     pred_logstd = flows[0][:, K*2:K*2+2]
                     pred_entropies = mixture_entropy(mean, pred_logstd, n_samples=100)
+
+                if self.loss_func.cfg.approx == 'sparse' and self.cfg.track_auc:
+                    if self.loss_func.cfg.inv_cov:
+                        log_diag = flows[2][:, 2:4]
+                        left = flows[2][:, 4:6, :, :-1]
+                        over = flows[2][:, 6:8, :-1, :]
+                        pred_entropies = inverse_diagonal(torch.exp(log_diag).contiguous(), left.contiguous(), over.contiguous())
+                        pred_entropies = uflow_utils.upsample(pred_entropies + 2*math.log(4), scale_factor=4, is_flow=False, align_corners=False)
+                    else:
+                        pred_entropies = flows[0][:, 2:4]
 
                 if self.cfg.track_auc:
                     pred_entropies = pred_entropies.detach().cpu().numpy().transpose([0, 2, 3, 1])
@@ -227,7 +241,7 @@ class TrainFramework(BaseTrainer):
                 entropy /= torch.max(entropy)
                 self.summary_writer.add_images("Valid/entropy_{}_{}".format(i_set, k), entropy.cpu(), self.i_epoch, dataformats='NCHW')
 
-            # write sparsification plots to tboard
+            # Write sparsification plots to tboard
             if len(splots) > 0 and len(oplots) > 0:
                 x_axis = np.linspace(0, 1, self.cfg.sp_samples)
                 y_axis1 = np.mean(splots, axis=0)
@@ -238,6 +252,11 @@ class TrainFramework(BaseTrainer):
                 ax.legend(['splot', 'oracle'])
                 np_fig = matplot_fig_to_numpy(fig)
                 self.summary_writer.add_image("Valid/splot_{}".format(i_set), np_fig, self.i_epoch, dataformats="HWC")
+
+            # Write sample images and the corresponding pixel weights
+            sample_flows_image = torch_flow2rgb(sample_flows.detach().cpu())
+            self.summary_writer.add_image("Valid/sample_flows_{}".format(i_set), sample_flows_image.cpu(), self.i_epoch, dataformats='NCHW')
+            self.summary_writer.add_image("Valid/sample_masks_{}".format(i_set), sample_masks.cpu(), self.i_epoch, dataformats='NCHW')
 
             all_error_avgs.extend(error_meters.avg)
             all_error_names.extend(['{}_{}'.format(name, i_set) for name in error_names])

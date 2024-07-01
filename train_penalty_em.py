@@ -9,6 +9,7 @@ from easydict import EasyDict
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import root_scalar
+from losses.uflow_elbo_loss import data_loss_no_penalty, smooth_loss_no_penalty
 
 cfg = {
     "data": [{
@@ -28,6 +29,7 @@ cfg = {
 
     "loss": {
         "edge_constant": 150,
+        "edge_asymp": 0.01,
         "type": "uflow_elbo",
         "w_smooth": 4.0,
         "data_loss": ["ssim"],
@@ -42,14 +44,15 @@ cfg = {
         "approx_entropy": False,
         "occu_mean": False,
         "n_samples": 1,
-        "offdiag_reg": 0.0
+        "offdiag_reg": 0.0,
+        "align_corners": False,
     },
 
     "train": {
-        "penalty": "data",
-        #"penalty": "smooth",
-        #"init_vars": [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50],
-        "init_vars": [0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50, 100],
+        #"penalty": "data",
+        "penalty": "smooth",
+        "init_vars": [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50],
+        #"init_vars": [0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50, 100],
         "subsample": 0.95,
         "n_samples": 3e6,
         "batch_size": 4,
@@ -250,27 +253,30 @@ if __name__ == "__main__":
 
         # Calculate data loss
         if cfg.train.penalty == 'data':
-            data_pixel_loss12, data_pixel_weight12 = loss_funct.data_loss_no_penalty(im1_0, im2_0, flows12_2, flows21_2)
+            data_pixel_loss12, data_pixel_weight12 = data_loss_no_penalty(im1_0, im2_0, flows12_2, flows21_2)
             loss_list = [data_pixel_loss12[0]]
             weight_list = [data_pixel_weight12[0]]
             if cfg.loss.with_bk:
                 # Arguments are passed in reverse order!
-                data_pixel_loss21, data_pixel_weight21 = loss_funct.data_loss_no_penalty(im2_0, im1_0, flows21_2, flows12_2)
+                data_pixel_loss21, data_pixel_weight21 = data_loss_no_penalty(im2_0, im1_0, flows21_2, flows12_2)
                 loss_list += [data_pixel_loss21[0], ]
                 weight_list += [data_pixel_weight21[0], ]
 
         else:
             # Calculate smoothness loss
-            smooth_loss12_x, smooth_weight12_x, smooth_loss12_y, smooth_weight12_y = loss_funct.smooth_loss_no_penalty(im1_0, flows12_2)
+            smooth_loss12_x, smooth_weight12_x, smooth_loss12_y, smooth_weight12_y = smooth_loss_no_penalty(
+                im1_0, flows12_2, cfg.loss.align_corners, cfg.loss.edge_constant, cfg.loss.edge_asymp
+            )
             loss_list = [smooth_loss12_x[:, :, :, 0:-1], smooth_loss12_y[:, :, 0:-1, :]]
             weight_list = [smooth_weight12_x[:, :, :, 0:-1].repeat([1, 2, 1, 1]),
                            smooth_weight12_y[:, :, 0:-1, :].repeat([1, 2, 1, 1])]
             if cfg.loss.with_bk:
                 # Arguments are passed in reverse order!
-                smooth_loss21_x, smooth_weight21_x, smooth_loss21_y, smooth_weight21_y = loss_funct.smooth_loss_no_penalty(im2_0, flows21_2)
-                loss_list += [smooth_loss21_x[:, :, :, 0:-1], smooth_loss21_y[:, :, 0:-1, :]]
-                weight_list += [smooth_weight21_x[:, :, :, 0:-1].repeat([1, 2, 1, 1]),
-                                smooth_weight21_y[:, :, 0:-1, :].repeat([1, 2, 1, 1])]
+                smooth_loss21_x, smooth_weight21_x, smooth_loss21_y, smooth_weight21_y = smooth_loss_no_penalty(
+                    im2_0, flows21_2, cfg.loss.align_corners, cfg.loss.edge_constant, cfg.loss.edge_asymp
+                )
+                loss_list += [torch.mean(smooth_loss21_x, dim=-1), torch.mean(smooth_loss21_y, dim=-1)]
+                weight_list += [smooth_weight21_x[:, :, :, 0:-1], smooth_weight21_y[:, :, 0:-1, :]]
 
         # Subsample
         for loss, weight in zip(loss_list, weight_list):
