@@ -240,7 +240,7 @@ def image_grads(image_batch, stride=1):
 
 def robust_l1(x):
     """Robust L1 metric."""
-    return (x ** 2 + 0.001 ** 2) ** 0.5
+    return (x + 0.001 ** 2) ** 0.5
 
 
 def abs_robust_loss(diff, eps=0.01, q=0.4):

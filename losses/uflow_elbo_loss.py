@@ -37,7 +37,7 @@ def data_loss_no_penalty(im1_0, im2_0, flow12_2, flow21_2, align_corners, occu_m
 
     # Calculate border and occlusion masks #
     ########################################
-    if occu_mean:
+    if occ_type == 'mean':
         mean12_0 = upsample(mean12_2, scale_factor=4, is_flow=True, align_corners=align_corners)
         mean21_0 = upsample(mean21_2, scale_factor=4, is_flow=True, align_corners=align_corners)
 
@@ -46,10 +46,16 @@ def data_loss_no_penalty(im1_0, im2_0, flow12_2, flow21_2, align_corners, occu_m
         occu_mask1 = torch.clamp(compute_range_map(mean21_0), min=0., max=1.)
         mask1 = torch.detach(occu_mask1 * valid_mask1)
 
-    else:
+    elif occ_type == 'sample':
         valid_mask1 = mask_invalid(warp12_0)
         occu_mask1 = torch.clamp(compute_range_map(flow21_0), min=0., max=1.)
         mask1 = torch.detach(occu_mask1 * valid_mask1)
+
+    elif occ_type == 'none':
+        mask1 = torch.detach(mask_invalid(warp12_0))
+
+    else:
+        raise NotImplementedError('Occlusion type {} not implemented!'.format(occ_type))
 
     # Calculate photometric loss on level 0 #
     #########################################
@@ -67,7 +73,7 @@ def data_loss_no_penalty(im1_0, im2_0, flow12_2, flow21_2, align_corners, occu_m
     return pixel_loss, pixel_weight
 
 
-def smooth_loss_no_penalty(im1_0, flow12_2, align_corners, edge_constant):
+def smooth_loss_no_penalty(im1_0, flow12_2, align_corners, edge_constant, edge_asymp):
     # Calculate smoothness loss on level 2 #
     ############################################################
     _, _, height, width = im1_0.size()
@@ -76,8 +82,8 @@ def smooth_loss_no_penalty(im1_0, flow12_2, align_corners, edge_constant):
 
     # Forward -----------
     im1_gx, im1_gy = image_grads(im1_2.detach())
-    weights1_x = torch.exp(-torch.mean(torch.abs(edge_constant * im1_gx), 1, keepdim=True))
-    weights1_y = torch.exp(-torch.mean(torch.abs(edge_constant * im1_gy), 1, keepdim=True))
+    weights1_x = edge_asymp + (1.0-edge_asymp)*torch.exp(-torch.mean(torch.abs(edge_constant * im1_gx), 1, keepdim=True))
+    weights1_y = edge_asymp + (1.0-edge_asymp)*torch.exp(-torch.mean(torch.abs(edge_constant * im1_gy), 1, keepdim=True))
 
     flow12_x, flow12_y = image_grads(flow12_2)
     weight12_x = weights1_x / 2.
@@ -363,8 +369,8 @@ class UFlowElboLoss(nn.modules.Module):
                 penalty_list.append(charbonnier)
 
         loss_warp = 0
-        data_pixel_loss12, data_pixel_weight12 = data_loss_no_penalty(
-            im1_0, im2_0, flow12_2, flow21_2, self.cfg.align_corners, self.cfg.occu_mean, self.cfg.data_loss,
+        data_pixel_loss12, data_pixel_weight12, mask12 = data_loss_no_penalty(
+            im1_0, im2_0, flow12_2, flow21_2, self.cfg.align_corners, self.cfg.occ_type, self.cfg.data_loss,
             mean12_2, mean21_2
         )
         for pixel_loss, pixel_weight, weight, penalty in zip(data_pixel_loss12, data_pixel_weight12, self.cfg.data_weight, penalty_list):
@@ -372,8 +378,8 @@ class UFlowElboLoss(nn.modules.Module):
 
         if self.cfg.with_bk:
             # Here the arguments are passed in reversed order!
-            data_pixel_loss21, data_pixel_weight21 = data_loss_no_penalty(
-                im2_0, im1_0, flow21_2, flow12_2, self.cfg.align_corners, self.cfg.occu_mean, self.cfg.data_loss,
+            data_pixel_loss21, data_pixel_weight21, _ = data_loss_no_penalty(
+                im2_0, im1_0, flow21_2, flow12_2, self.cfg.align_corners, self.cfg.occ_type, self.cfg.data_loss,
                 mean21_2, mean12_2
             )
             for pixel_loss, pixel_weight, weight, penalty in zip(data_pixel_loss21, data_pixel_weight21, self.cfg.data_weight, penalty_list):
@@ -381,24 +387,26 @@ class UFlowElboLoss(nn.modules.Module):
 
         # Smoothness loss on level 2 #
         ##############################
-        if self.cfg.penalty_smooth == "robust_l1":
-            penalty_func_smooth = robust_l1
+        if self.cfg.penalty_smooth == "charbonnier":
+            penalty_func_smooth = charbonnier
         elif self.cfg.penalty_smooth == "gmm":
             penalty_func_smooth = lambda x: -log_gmm(x, self.cfg.penalty_smooth_pi, self.cfg.penalty_smooth_beta)
 
         smooth_loss12_x, smooth_weight12_x, smooth_loss12_y, smooth_weight12_y = smooth_loss_no_penalty(
-            im1_0, flow12_2, self.cfg.align_corners, self.cfg.edge_constant
+            im1_0, flow12_2, self.cfg.align_corners, self.cfg.edge_constant, self.cfg.edge_asymp
         )
         # In contrast to data loss, the smoothness loss is AVERAGED over pixels (comes from the UFlow code)
-        loss_smooth = torch.mean(smooth_weight12_x * self.cfg.w_smooth * penalty_func_smooth(smooth_loss12_x)) \
-                      + torch.mean(smooth_weight12_y * self.cfg.w_smooth * penalty_func_smooth(smooth_loss12_y))
+        loss_smooth = torch.mean(smooth_weight12_x * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss12_x**2, dim=1))) \
+                      + torch.mean(smooth_weight12_y * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss12_y**2, dim=1)))
         if self.cfg.with_bk:
             # Here the arguments are passed in reversed order!
             smooth_loss21_x, smooth_weight21_x, smooth_loss21_y, smooth_weight21_y = smooth_loss_no_penalty(
-                im2_0, flow21_2, self.cfg.align_corners, self.cfg.edge_constant
+                im2_0, flow21_2, self.cfg.align_corners, self.cfg.edge_constant, self.cfg.edge_asymp
             )
             loss_smooth += torch.mean(smooth_weight21_x * self.cfg.w_smooth * penalty_func_smooth(smooth_loss21_x)) \
                           + torch.mean(smooth_weight21_y * self.cfg.w_smooth * penalty_func_smooth(smooth_loss21_y))
+            loss_smooth += torch.mean(smooth_weight21_x * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss21_x**2, dim=1))) \
+                          + torch.mean(smooth_weight21_y * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss21_y**2, dim=1)))
 
         # Calculate total loss #
         ########################
