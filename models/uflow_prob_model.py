@@ -195,9 +195,15 @@ class PWCProbFlow(nn.Module):
                 [flow[level][:, 0:self._out_channels[0]] for flow in input_list], dim=1
             )
             log_diag = torch.cat(
-                [flow[level][:, self._out_channels[0]:self._out_channels[0]+self._out_channels[1]] for flow in input_list], dim=1
+                [flow[level][:, self._out_channels[0]:sum(self._out_channels[0:2])] for flow in input_list], dim=1
             )
-            out_list.append(torch.concatenate((mean, log_diag), dim=1))
+            if input_list[0][level].size(1) > sum(self._out_channels[0:2]):
+                rest = torch.cat(
+                    [flow[level][:, sum(self._out_channels[0:2]):sum(self._out_channels)] for flow in input_list], dim=1
+                )
+                out_list.append(torch.concatenate((mean, log_diag, rest), dim=1))
+            else:
+                out_list.append(torch.concatenate((mean, log_diag), dim=1))
 
         return out_list
 
@@ -336,9 +342,9 @@ class PWCProbFlow(nn.Module):
             outs.insert(0, out)
 
         # Pad channels if needed
-        if out.shape[1] > sum(self._out_channels[0:2]):
+        if out.shape[1] < sum(self._out_channels):
             shape = list(out.shape)
-            shape[1] = sum(self._out_channels) - out_up.shape[1]
+            shape[1] = sum(self._out_channels) - out.shape[1]
             padding = torch.zeros(shape).type_as(out)
             out = torch.cat((out, padding), 1)
 
