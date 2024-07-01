@@ -9,15 +9,33 @@ import torch.nn.functional as F
 import triag_solve_cuda
 
 
-def matrix_vector_product(A, B, C, X):
+def matrix_vector_product_old(A, B, C, X):
     B_Y = torch.nn.functional.pad(B * X[:, :, :, 0:-1], (1, 0))
     C_Y = torch.nn.functional.pad(C * X[:, :, 0:-1, :], (0, 0, 1, 0))
     return A * X + B_Y + C_Y
 
 
-def matrix_vector_product_T(A, B, C, X):
+def matrix_vector_product(A, B, C, D, X):
+    """
+    |D|C|
+    |B|A|
+    """
+    B_Y = torch.nn.functional.pad(B * X[:, :, :, 0:-1], (1, 0))
+    C_Y = torch.nn.functional.pad(C * X[:, :, 0:-1, :], (0, 0, 1, 0))
+    D_Y = torch.nn.functional.pad(D * X[:, :, 0:-1, 0:-1], (1, 0, 1, 0))
+    return A * X + B_Y + C_Y + D_Y
+
+
+def matrix_vector_product_T_old(A, B, C, X):
     B_Y = torch.nn.functional.pad(B * X[:, :, :, 1:], (0, 1))
     C_Y = torch.nn.functional.pad(C * X[:, :, 1:, :], (0, 0, 0, 1))
+    return A * X + B_Y + C_Y
+
+
+def matrix_vector_product_T(A, B, C, D, X):
+    B_Y = torch.nn.functional.pad(B * X[:, :, :, 1:], (0, 1))
+    C_Y = torch.nn.functional.pad(C * X[:, :, 1:, :], (0, 0, 0, 1))
+    D_Y = torch.nn.functional.pad(D * X[:, :, 1:, 1:], (0, 1, 0, 1))
     return A * X + B_Y + C_Y
 
 
@@ -273,7 +291,7 @@ def trans_inverse_l1norm_exact(A, B, C):
 
 
 def natural_gradient_np(G, T):
-    H = T.T @ G
+    H = T.T @ np.tril(G)
     Hbb = np.tril(H) - np.diag(np.diag(H))/2
     Q = T @ Hbb
     return Q
@@ -383,14 +401,14 @@ def check_inverse_diagonal():
 
 
 def check_inverse_l1norm():
-    M = 20  # Rows
+    M = 10  # Rows
     N = 20  # Cols
-    A = 10*torch.ones((M, N))
+    A = 1*torch.ones((M, N))
     B = torch.randn(M, N - 1)  # left
     C = torch.randn(M - 1, N)  # up
 
-    norm = inverse_l1norm(A, B, C)
-    print("Approximate: ", norm)
+    norm = inverse_l1norm(A, B, C, n_iter=10)
+    print("Approximate: ", norm.item())
     norm = inverse_l1norm_exact(A, B, C)
     print("Exact: ", norm)
     norm = trans_inverse_l1norm_exact(A, B, C)
@@ -399,7 +417,7 @@ def check_inverse_l1norm():
 
 def check_natural_gradient():
     M = 20  # Rows
-    N = 10  # Cols
+    N = 30  # Cols
     GA = torch.randn((M, N), dtype=torch.double)
     GB = torch.randn(M, N - 1, dtype=torch.double)  # left
     GC = torch.randn(M - 1, N, dtype=torch.double)  # up
@@ -435,4 +453,4 @@ def check_natural_gradient():
 
 if __name__ == '__main__':
     torch.use_deterministic_algorithms(True)
-    check_natural_gradient()
+    check_inverse_l1norm()
