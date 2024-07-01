@@ -314,8 +314,7 @@ def natural_gradient(GA, GB, GC, TA, TB, TC):
     q_lNl = TA[:, :, 1:, :] * h_lNl + F.pad(TB[:, :, 1:, :] * h_lN1l, [1, 0]) + TC * h_ll[:, :, :-1, :]
     return q_ll, q_l1l, q_lNl
 
-
-class NaturalGradientIdentity(Function):
+class NaturalGradientIdentityT(Function):
     @staticmethod
     def forward(ctx, A, B, C, X):
         ctx.save_for_backward(A, B, C, X)
@@ -329,6 +328,27 @@ class NaturalGradientIdentity(Function):
         # Natural gradient with respect to X (the mean)
         dX_n = triag_solve_cuda.forward_substitution(A, B, C, dX)
         dX_n = triag_solve_cuda.backward_substitution(A, B, C, dX_n)
+
+        # Natural gradient with respect to T
+        dA_n, dB_n, dC_n = natural_gradient(dA, dB, dC, A, B, C)
+
+        return dA_n, dB_n, dC_n, dX_n
+
+
+class NaturalGradientIdentityC(Function):
+    @staticmethod
+    def forward(ctx, A, B, C, X):
+        ctx.save_for_backward(A, B, C, X)
+        return A, B, C, X
+
+    @staticmethod
+    @once_differentiable
+    def backward(ctx, dA, dB, dC, dX):
+        A, B, C, X = ctx.saved_tensors
+
+        # Natural gradient with respect to X (the mean)
+        dX_n = matrix_vector_product_T(A, B, C, dX)
+        dX_n = matrix_vector_product(A, B, C, dX_n)
 
         # Natural gradient with respect to T
         dA_n, dB_n, dC_n = natural_gradient(dA, dB, dC, A, B, C)
