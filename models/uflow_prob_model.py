@@ -693,13 +693,13 @@ class MixtureWeightsNet(nn.Module):
 
         # Compute per-pixel losses and weights
         data_pixel_loss12, data_pixel_weight12 = data_loss_no_penalty(
-            im1_0, im2_0, flow12_2, flow21_2, self.cfg.align_corners, False, ['census']
+            im1_0, im2_0, flow12_2, flow21_2, self.cfg.align_corners, "none", ['census']
         )
         # data_loss_no_penalty returns a list of tensors corresponding to the data_loss list
         data_pixel_loss12 = data_pixel_loss12[0]
         data_pixel_weight12 = data_pixel_weight12[0]
         smooth_loss12_x, smooth_weight12_x, smooth_loss12_y, smooth_weight12_y = smooth_loss_no_penalty(
-            im1_0, flow12_2, self.cfg.align_corners, 150.0
+            im1_0, flow12_2, self.cfg.align_corners, 150.0, edge_asymp=0.01
         )
 
         # Downscale data loss to level 2 in order to match the size of the smoothness loss
