@@ -238,11 +238,6 @@ def image_grads(image_batch, stride=1):
     return image_batch_x, image_batch_y
 
 
-def robust_l1(x):
-    """Robust L1 metric."""
-    return (x + 0.001 ** 2) ** 0.5
-
-
 def abs_robust_loss(diff, eps=0.01, q=0.4):
     return torch.pow((torch.abs(diff) + eps), q)
 

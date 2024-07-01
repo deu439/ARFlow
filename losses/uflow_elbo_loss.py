@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,12 +6,12 @@ from torch.autograd.function import once_differentiable
 
 import math
 
-from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_invalid, census_loss_no_penalty, image_grads, robust_l1, abs_robust_loss, upsample, ssim_loss, charbonnier
+from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_invalid, census_loss_no_penalty, image_grads, abs_robust_loss, upsample, ssim_loss, charbonnier
 from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product, matrix_vector_product_T, NaturalGradientIdentityT, NaturalGradientIdentityC
 from utils.misc_utils import gaussian_mixture_log_pdf
 
 
-def data_loss_no_penalty(im1_0, im2_0, flow12_2, flow21_2, align_corners, occu_mean, data_loss, mean12_2=None, mean21_2=None):
+def data_loss_no_penalty(im1_0, im2_0, flow12_2, flow21_2, align_corners, occ_type, data_loss, mean12_2=None, mean21_2=None):
     """
     Computes the per-pixel data loss and weight map before applying penalty functions
     :param: im1_0: (batch, channels, height, width) tensor representing the first image at original resolution (level 0)
@@ -70,7 +69,7 @@ def data_loss_no_penalty(im1_0, im2_0, flow12_2, flow21_2, align_corners, occu_m
         pixel_loss.append(l)
         pixel_weight.append(w)
 
-    return pixel_loss, pixel_weight
+    return pixel_loss, pixel_weight, mask1
 
 
 def smooth_loss_no_penalty(im1_0, flow12_2, align_corners, edge_constant, edge_asymp):
@@ -146,13 +145,14 @@ class UFlowElboLoss(nn.modules.Module):
         z = mean + torch.exp(-log_diag) * self.Normal.sample(mean.size())
         return z
 
-    def reparam_triag(self, mean, diag, left, over, nsamples=1):
+    def reparam_triag(self, mean, diag, left, over, leftover, nsamples=1):
         mean = mean.repeat(nsamples, 1, 1, 1)
         diag = diag.repeat(nsamples, 1, 1, 1)
         left = left.repeat(nsamples, 1, 1, 1)
         over = over.repeat(nsamples, 1, 1, 1)
+        leftover = leftover.repeat(nsamples, 1, 1, 1)
         eps = self.Normal.sample(mean.size())
-        z = mean + matrix_vector_product(diag, left, over, eps)
+        z = mean + matrix_vector_product(diag, left, over, leftover, eps)
         return z
 
     def reparam_triag_inv(self, mean, diag, left, over, nsamples=1):
@@ -206,11 +206,13 @@ class UFlowElboLoss(nn.modules.Module):
             log_diag12_2 = res_dict['flows_fw'][2][:, 2:4]
             left12_2 = res_dict['flows_fw'][2][:, 4:6, :, :-1]
             over12_2 = res_dict['flows_fw'][2][:, 6:8, :-1, :]
+            leftover12_2 = res_dict['flows_fw'][2][:, 8:10, :-1, :-1]
 
             mean21_2 = res_dict['flows_bw'][2][:, 0:2]
             log_diag21_2 = res_dict['flows_bw'][2][:, 2:4]
             left21_2 = res_dict['flows_bw'][2][:, 4:6, :, :-1]
             over21_2 = res_dict['flows_bw'][2][:, 6:8, :-1, :]
+            leftover12_2 = res_dict['flows_bw'][2][:, 8:10, :-1, :-1]
 
             # Ensure that the matrices are diagonally dominant
             diag12_2 = torch.exp(log_diag12_2)
@@ -300,8 +302,8 @@ class UFlowElboLoss(nn.modules.Module):
             flow12_2 = self.reparam_diag_inv(mean12_2, log_diag12_2, nsamples=self.cfg.n_samples)
             flow21_2 = self.reparam_diag_inv(mean21_2, log_diag21_2, nsamples=self.cfg.n_samples)
         elif self.cfg.approx == 'sparse' and not self.cfg.inv_cov:
-            flow12_2 = self.reparam_triag(mean12_2, diag12_2, left12_2, over12_2, nsamples=self.cfg.n_samples)
-            flow21_2 = self.reparam_triag(mean21_2, diag21_2, left21_2, over21_2, nsamples=self.cfg.n_samples)
+            flow12_2 = self.reparam_triag(mean12_2, diag12_2, left12_2, over12_2, leftover12_2, nsamples=self.cfg.n_samples)
+            flow21_2 = self.reparam_triag(mean21_2, diag21_2, left21_2, over21_2, leftover12_2, nsamples=self.cfg.n_samples)
         elif self.cfg.approx == 'sparse' and self.cfg.inv_cov:
             flow12_2 = self.reparam_triag_inv(mean12_2, diag12_2, left12_2, over12_2, nsamples=self.cfg.n_samples)
             flow21_2 = self.reparam_triag_inv(mean21_2, diag21_2, left21_2, over21_2, nsamples=self.cfg.n_samples)
@@ -403,8 +405,6 @@ class UFlowElboLoss(nn.modules.Module):
             smooth_loss21_x, smooth_weight21_x, smooth_loss21_y, smooth_weight21_y = smooth_loss_no_penalty(
                 im2_0, flow21_2, self.cfg.align_corners, self.cfg.edge_constant, self.cfg.edge_asymp
             )
-            loss_smooth += torch.mean(smooth_weight21_x * self.cfg.w_smooth * penalty_func_smooth(smooth_loss21_x)) \
-                          + torch.mean(smooth_weight21_y * self.cfg.w_smooth * penalty_func_smooth(smooth_loss21_y))
             loss_smooth += torch.mean(smooth_weight21_x * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss21_x**2, dim=1))) \
                           + torch.mean(smooth_weight21_y * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss21_y**2, dim=1)))
 
@@ -414,4 +414,4 @@ class UFlowElboLoss(nn.modules.Module):
         if self.cfg.approx == 'sparse':
             total_loss += self.cfg.offdiag_reg*loss_offdiag
 
-        return total_loss, loss_warp, loss_smooth, loss_entropy, loss_offdiag
+        return total_loss, loss_warp, loss_smooth, loss_entropy, loss_offdiag, flow12_2, mask12
