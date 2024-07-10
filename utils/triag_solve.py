@@ -26,6 +26,23 @@ def matrix_vector_product(A, B, C, D, X):
     return A * X + B_Y + C_Y + D_Y
 
 
+def matrix_vector_product_general(A, X, k=1):
+    Y = torch.zeros_like(X)
+    for i in range(k+1):
+        for j in range(k+1):
+            ind = i*(k+1) + j
+            if i > 0 and j > 0:
+                Y += torch.nn.functional.pad(A[:, ind*2:(ind+1)*2, 0:-i, 0:-j] * X[:, :, 0:-i, 0:-j], (j, 0, i, 0))
+            elif i > 0:
+                Y += torch.nn.functional.pad(A[:, ind*2:(ind+1)*2, 0:-i, :] * X[:, :, 0:-i, :], (0, 0, i, 0))
+            elif j > 0:
+                Y += torch.nn.functional.pad(A[:, ind*2:(ind+1)*2, :, 0:-j] * X[:, :, :, 0:-j], (j, 0, 0, 0))
+            else:
+                Y += A[:, ind*2:(ind+1)*2, :, :] * X[:, :, :, :]
+
+    return Y
+
+
 def matrix_vector_product_T_old(A, B, C, X):
     B_Y = torch.nn.functional.pad(B * X[:, :, :, 1:], (0, 1))
     C_Y = torch.nn.functional.pad(C * X[:, :, 1:, :], (0, 0, 0, 1))
@@ -36,13 +53,31 @@ def matrix_vector_product_T(A, B, C, D, X):
     B_Y = torch.nn.functional.pad(B * X[:, :, :, 1:], (0, 1))
     C_Y = torch.nn.functional.pad(C * X[:, :, 1:, :], (0, 0, 0, 1))
     D_Y = torch.nn.functional.pad(D * X[:, :, 1:, 1:], (0, 1, 0, 1))
-    return A * X + B_Y + C_Y
+    return A * X + B_Y + C_Y + D_Y
 
 
-def forward_substitution(A, B, C, X):
+def matrix_vector_product_T_general(A, X, k=1):
+    Y = torch.zeros_like(X)
+    for i in range(k+1):
+        for j in range(k+1):
+            ind = i*(k+1) + j
+            if i > 0 and j > 0:
+                Y += torch.nn.functional.pad(A[:, ind*2:(ind+1)*2, 0:-i, 0:-j] * X[:, :, i:, j:], (0, j, 0, i))
+            elif i > 0:
+                Y += torch.nn.functional.pad(A[:, ind*2:(ind+1)*2, 0:-i, :] * X[:, :, i:, :], (0, 0, 0, i))
+            elif j > 0:
+                Y += torch.nn.functional.pad(A[:, ind*2:(ind+1)*2, :, 0:-j] * X[:, :, :, j:], (0, j, 0, 0))
+            else:
+                Y += A[:, ind*2:(ind+1)*2, :, :] * X[:, :, :, :]
+
+    return Y
+
+
+def forward_substitution(A, B, C, D, X):
     """
     Solves J*y=x where J is lower triangular matrix, represented by A: K x L x M x N (center pixels), B: K x L x M x N-1
-    (left pixels), C: K x L x M-1 x N (above pixels). y = vec(Y: K x L x M x N) and x = vec(X: K x L x M x N).
+    (left pixels), C: K x L x M-1 x N (above pixels), D: K x L x M-1 x N-1 (left-over pixels). y = vec(Y: K x L x M x N)
+    and x = vec(X: K x L x M x N).
     """
     M, N = A.shape[2:]
     Y = torch.clone(X)
@@ -52,15 +87,18 @@ def forward_substitution(A, B, C, X):
                 Y[:, :, i, j] -= Y[:, :, i - 1, j] * C[:, :, i - 1, j]
             if j > 0:
                 Y[:, :, i, j] -= Y[:, :, i, j - 1] * B[:, :, i, j - 1]
+            if i > 0 and j > 0:
+                Y[:, :, i, j] -= Y[:, :, i - 1, j - 1] * D[:, :, i - 1, j - 1]
             Y[:, :, i, j] /= A[:, :, i, j]
 
     return Y
 
 
-def backward_substitution(A, B, C, X):
+def backward_substitution(A, B, C, D, X):
     """
     Solves J*y=x where J is upper triangular matrix, represented by A: K x L x M x N (center pixels), B: K x L x M x N-1
-    (right pixels), C: K x L x M-1 x N (below pixels). y = vec(Y: K x L x M x N) and x = vec(X: K x L x M x N).
+    (right pixels), C: K x L x M-1 x N (below pixels), D: K x L x M-1 x N-1 (left-over pixels).
+    y = vec(Y: K x L x M x N) and x = vec(X: K x L x M x N).
     """
     M, N = A.shape[2:]
     Y = torch.clone(X)
@@ -70,6 +108,8 @@ def backward_substitution(A, B, C, X):
                 Y[:, :, i, j] -= Y[:, :, i + 1, j] * C[:, :, i, j]
             if j < N-1:
                 Y[:, :, i, j] -= Y[:, :, i, j + 1] * B[:, :, i, j]
+            if i < M-1 and j < N-1:
+                Y[:, :, i, j] -= Y[:, :, i + 1, j + 1] * D[:, :, i, j]
             Y[:, :, i, j] /= A[:, :, i, j]
 
     return Y
@@ -122,42 +162,44 @@ def backward_substitution_npsolve(A, B, C, X):
 
 class ForwardSubst(Function):
     @staticmethod
-    def forward(ctx, A, B, C, X):
-        Y = triag_solve_cuda.forward_substitution(A, B, C, X)
+    def forward(ctx, A, B, C, D, X):
+        Y = triag_solve_cuda.forward_substitution(A, B, C, D, X)
         #Y = forward_substitution(A, B, C, X)
-        ctx.save_for_backward(A, B, C, Y)
+        ctx.save_for_backward(A, B, C, D, Y)
         return Y
 
     @staticmethod
     @once_differentiable
     def backward(ctx, dY):
-        A, B, C, Y = ctx.saved_tensors
-        dX = triag_solve_cuda.backward_substitution(A, B, C, dY)
-        #dX = backward_substitution(A, B, C, dY)
+        A, B, C, D, Y = ctx.saved_tensors
+        dX = triag_solve_cuda.backward_substitution(A, B, C, D, dY)
+        #dX = backward_substitution(A, B, C, D, dY)
         dA = -dX * Y
         dB = -dX[:, :, :, 1:] * Y[:, :, :, :-1]
         dC = -dX[:, :, 1:, :] * Y[:, :, :-1, :]
-        return dA, dB, dC, dX
+        dD = -dX[:, :, 1:, 1:] * Y[:, :, :-1, :-1]
+        return dA, dB, dC, dD, dX
 
 
 class BackwardSubst(Function):
     @staticmethod
-    def forward(ctx, A, B, C, X):
-        Y = triag_solve_cuda.backward_substitution(A, B, C, X)
-        #Y = backward_substitution(A, B, C, X)
-        ctx.save_for_backward(A, B, C, Y)
+    def forward(ctx, A, B, C, D, X):
+        Y = triag_solve_cuda.backward_substitution(A, B, C, D, X)
+        #Y = backward_substitution(A, B, C, D, X)
+        ctx.save_for_backward(A, B, C, D, Y)
         return Y
 
     @staticmethod
     @once_differentiable
     def backward(ctx, dY):
-        A, B, C, Y = ctx.saved_tensors
-        dX = triag_solve_cuda.forward_substitution(A, B, C, dY)
+        A, B, C, D, Y = ctx.saved_tensors
+        dX = triag_solve_cuda.forward_substitution(A, B, C, D, dY)
         #dX = forward_substitution(A, B, C, dY)
         dA = -dX * Y
         dB = -dX[:, :, :, :-1] * Y[:, :, :, 1:]
         dC = -dX[:, :, :-1, :] * Y[:, :, 1:, :]
-        return dA, dB, dC, dX
+        dD = -dX[:, :, :-1, :-1] * Y[:, :, 1:, 1:]
+        return dA, dB, dC, dD, dX
 
 
 def marginal_variances(A, B, C):

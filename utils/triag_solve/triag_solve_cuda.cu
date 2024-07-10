@@ -9,6 +9,7 @@ __global__ void forward_substitution_kernel(
     const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> A,
     const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> B,
     const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> C,
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> D,
     torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> Y) {
 
     int M = A.size(2);
@@ -26,6 +27,8 @@ __global__ void forward_substitution_kernel(
                     Y[i][j][k][l] = Y[i][j][k][l] -  Y[i][j][k - 1][l] * C[i][j][k - 1][l];
                 if (l > 0)
                     Y[i][j][k][l] = Y[i][j][k][l] - Y[i][j][k][l - 1] * B[i][j][k][l - 1];
+                if ((k > 0) && (l > 0))
+                    Y[i][j][k][l] = Y[i][j][k][l] - Y[i][j][k - 1][l - 1] * D[i][j][k - 1][l - 1];
 
                 Y[i][j][k][l] = Y[i][j][k][l] / A[i][j][k][l];
             }
@@ -38,6 +41,7 @@ __global__ void backward_substitution_kernel(
     const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> A,
     const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> B,
     const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> C,
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> D,
     torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> Y) {
 
     int M = A.size(2);
@@ -55,6 +59,8 @@ __global__ void backward_substitution_kernel(
                     Y[i][j][k][l] = Y[i][j][k][l] -  Y[i][j][k + 1][l] * C[i][j][k][l];
                 if (l < N-1)
                     Y[i][j][k][l] = Y[i][j][k][l] - Y[i][j][k][l + 1] * B[i][j][k][l];
+                 if ((k < M-1) && (l < N-1))
+                    Y[i][j][k][l] = Y[i][j][k][l] - Y[i][j][k + 1][l + 1] * D[i][j][k][l];
 
                 Y[i][j][k][l] = Y[i][j][k][l] / A[i][j][k][l];
             }
@@ -132,7 +138,7 @@ __global__ void inverse_diagonal_kernel(
     }
 }
 
-torch::Tensor forward_substitution_cuda(torch::Tensor A, torch::Tensor B, torch::Tensor C, torch::Tensor Y) {
+torch::Tensor forward_substitution_cuda(torch::Tensor A, torch::Tensor B, torch::Tensor C, torch::Tensor D, torch::Tensor Y) {
     // Compute required number of blocks and threads
     int block_size = 32;
     int num_blocks = ceil((A.size(0) * A.size(1)) / (float)block_size);
@@ -143,13 +149,14 @@ torch::Tensor forward_substitution_cuda(torch::Tensor A, torch::Tensor B, torch:
             A.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
             B.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
             C.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+            D.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
             Y.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>());
     }));
 
     return Y;
 }
 
-torch::Tensor backward_substitution_cuda(torch::Tensor A, torch::Tensor B, torch::Tensor C, torch::Tensor Y) {
+torch::Tensor backward_substitution_cuda(torch::Tensor A, torch::Tensor B, torch::Tensor C, torch::Tensor D, torch::Tensor Y) {
     // Compute required number of blocks and threads
     int block_size = 32;
     int num_blocks = ceil((A.size(0) * A.size(1)) / (float)block_size);
@@ -160,6 +167,7 @@ torch::Tensor backward_substitution_cuda(torch::Tensor A, torch::Tensor B, torch
             A.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
             B.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
             C.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+            D.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
             Y.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>());
     }));
 

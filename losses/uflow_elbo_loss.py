@@ -7,7 +7,7 @@ from torch.autograd.function import once_differentiable
 import math
 
 from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_invalid, census_loss_no_penalty, image_grads, abs_robust_loss, upsample, ssim_loss, charbonnier
-from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product, matrix_vector_product_T, NaturalGradientIdentityT, NaturalGradientIdentityC
+from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product_general, matrix_vector_product_T_general, NaturalGradientIdentityT, NaturalGradientIdentityC
 from utils.misc_utils import gaussian_mixture_log_pdf
 
 
@@ -145,23 +145,21 @@ class UFlowElboLoss(nn.modules.Module):
         z = mean + torch.exp(-log_diag) * self.Normal.sample(mean.size())
         return z
 
-    def reparam_triag(self, mean, diag, left, over, leftover, nsamples=1):
+    def reparam_triag(self, mean, std, nsamples=1):
+        mean = mean.repeat(nsamples, 1, 1, 1)
+        std = std.repeat(nsamples, 1, 1, 1)
+        eps = self.Normal.sample(mean.size())
+        z = mean + matrix_vector_product_general(std, eps, k=self.cfg.cov_supp)
+        return z
+
+    def reparam_triag_inv(self, mean, diag, left, over, leftover, nsamples=1):
         mean = mean.repeat(nsamples, 1, 1, 1)
         diag = diag.repeat(nsamples, 1, 1, 1)
         left = left.repeat(nsamples, 1, 1, 1)
         over = over.repeat(nsamples, 1, 1, 1)
         leftover = leftover.repeat(nsamples, 1, 1, 1)
         eps = self.Normal.sample(mean.size())
-        z = mean + matrix_vector_product(diag, left, over, leftover, eps)
-        return z
-
-    def reparam_triag_inv(self, mean, diag, left, over, nsamples=1):
-        mean = mean.repeat(nsamples, 1, 1, 1)
-        diag = diag.repeat(nsamples, 1, 1, 1)
-        left = left.repeat(nsamples, 1, 1, 1)
-        over = over.repeat(nsamples, 1, 1, 1)
-        eps = self.Normal.sample(mean.size())
-        z = mean + BackwardSubst.apply(diag, left, over, eps)
+        z = mean + BackwardSubst.apply(diag, left, over, leftover, eps)
         return z
 
     def reparam_gmm(self, mean, std, weights, nsamples=1):
@@ -204,28 +202,20 @@ class UFlowElboLoss(nn.modules.Module):
         elif self.cfg.approx == 'sparse':
             mean12_2 = res_dict['flows_fw'][2][:, 0:2]
             log_diag12_2 = res_dict['flows_fw'][2][:, 2:4]
-            left12_2 = res_dict['flows_fw'][2][:, 4:6, :, :-1]
-            over12_2 = res_dict['flows_fw'][2][:, 6:8, :-1, :]
-            leftover12_2 = res_dict['flows_fw'][2][:, 8:10, :-1, :-1]
+            num_offdiag = (self.cfg.cov_supp + 1)**2 - 1
+            offdiag12_2 = res_dict['flows_fw'][2][:, 4:4+num_offdiag*2]
 
             mean21_2 = res_dict['flows_bw'][2][:, 0:2]
             log_diag21_2 = res_dict['flows_bw'][2][:, 2:4]
-            left21_2 = res_dict['flows_bw'][2][:, 4:6, :, :-1]
-            over21_2 = res_dict['flows_bw'][2][:, 6:8, :-1, :]
-            leftover12_2 = res_dict['flows_bw'][2][:, 8:10, :-1, :-1]
+            offdiag21_2 = res_dict['flows_bw'][2][:, 4:4+num_offdiag*2]
 
-            # Ensure that the matrices are diagonally dominant
+            # Revert the log
             diag12_2 = torch.exp(log_diag12_2)
             diag21_2 = torch.exp(log_diag21_2)
-            if self.cfg.diag_dominant is not None:
-                offdiag12 = F.pad(torch.abs(left12_2), (1, 0)) + F.pad(torch.abs(over12_2), (0, 0, 1, 0))
-                diag12_2 = diag12_2 + self.cfg.diag_dominant * offdiag12
-                offdiag21 = F.pad(torch.abs(left21_2), (1, 0)) + F.pad(torch.abs(over21_2), (0, 0, 1, 0))
-                diag21_2 = diag21_2 + self.cfg.diag_dominant * offdiag21
 
-                # Update the log values
-                log_diag12_2 = torch.log(diag12_2)
-                log_diag21_2 = torch.log(diag21_2)
+            # Full covariance/precision tensor
+            full12_2 = torch.concat((diag12_2, offdiag12_2), dim=1)
+            full21_2 = torch.concat((diag21_2, offdiag21_2), dim=1)
 
         elif self.cfg.approx == 'mixture':
             K = self.cfg.n_components
@@ -248,39 +238,41 @@ class UFlowElboLoss(nn.modules.Module):
         # Apply identity function that implements natural gradient computation #
         ########################################################################
         if self.cfg.natural_grad:
-            if self.cfg.inv_cov:
-                diag12_2, left12_2, over12_2, mean12_2 = NaturalGradientIdentityT.apply(
-                    diag12_2.contiguous(), left12_2.contiguous(), over12_2.contiguous(), mean12_2.contiguous()
-                )
-                diag21_2, left21_2, over21_2, mean21_2 = NaturalGradientIdentityT.apply(
-                    diag21_2.contiguous(), left21_2.contiguous(), over21_2.contiguous(), mean21_2.contiguous()
-                )
-            else:
-                diag12_2, left12_2, over12_2, mean12_2 = NaturalGradientIdentityC.apply(
-                    diag12_2.contiguous(), left12_2.contiguous(), over12_2.contiguous(), mean12_2.contiguous()
-                )
-                diag21_2, left21_2, over21_2, mean21_2 = NaturalGradientIdentityC.apply(
-                    diag21_2.contiguous(), left21_2.contiguous(), over21_2.contiguous(), mean21_2.contiguous()
-                )
+            raise NotImplementedError("Natural gradient is not implemented!")
+            #if self.cfg.inv_cov:
+            #    diag12_2, left12_2, over12_2, mean12_2 = NaturalGradientIdentityT.apply(
+            #        diag12_2.contiguous(), left12_2.contiguous(), over12_2.contiguous(), mean12_2.contiguous()
+            #    )
+            #    diag21_2, left21_2, over21_2, mean21_2 = NaturalGradientIdentityT.apply(
+            #        diag21_2.contiguous(), left21_2.contiguous(), over21_2.contiguous(), mean21_2.contiguous()
+            #    )
+            #else:
+            #    diag12_2, left12_2, over12_2, mean12_2 = NaturalGradientIdentityC.apply(
+            #        diag12_2.contiguous(), left12_2.contiguous(), over12_2.contiguous(), mean12_2.contiguous()
+            #    )
+            #    diag21_2, left21_2, over21_2, mean21_2 = NaturalGradientIdentityC.apply(
+            #        diag21_2.contiguous(), left21_2.contiguous(), over21_2.contiguous(), mean21_2.contiguous()
+            #    )
 
-            # Update the log values
-            log_diag12_2 = torch.log(diag12_2)
-            log_diag21_2 = torch.log(diag21_2)
+            ## Update the log values
+            #log_diag12_2 = torch.log(diag12_2)
+            #log_diag21_2 = torch.log(diag21_2)
 
         if self.cfg.slow_down:
-            diag12_2, left12_2, over12_2, mean12_2 = SlowDownIdentity.apply(diag12_2, left12_2, over12_2, mean12_2)
-            diag21_2, left21_2, over21_2, mean21_2 = SlowDownIdentity.apply(diag21_2, left21_2, over21_2, mean21_2)
-            # Update the log values
-            log_diag12_2 = torch.log(diag12_2)
-            log_diag21_2 = torch.log(diag21_2)
+            raise NotImplementedError("Slowing-down is not implemented!")
+            #diag12_2, left12_2, over12_2, mean12_2 = SlowDownIdentity.apply(diag12_2, left12_2, over12_2, mean12_2)
+            #diag21_2, left21_2, over21_2, mean21_2 = SlowDownIdentity.apply(diag21_2, left21_2, over21_2, mean21_2)
+            ## Update the log values
+            #log_diag12_2 = torch.log(diag12_2)
+            #log_diag21_2 = torch.log(diag21_2)
 
         # Regularization of the off-diagonal entries #
         ##############################################
         loss_offdiag = 0
         if self.cfg.approx == 'sparse':
-            loss_offdiag = (torch.mean(torch.square(left12_2)) + torch.mean(torch.square(over12_2))) / 2.0
+            loss_offdiag = torch.mean(torch.square(offdiag12_2))
             if self.cfg.with_bk:
-                loss_offdiag += (torch.mean(torch.square(left21_2)) + torch.mean(torch.square(over21_2))) / 2.0
+                loss_offdiag += torch.mean(torch.square(offdiag21_2))
 
         # Calculate l1 norm of the precision matrix inverse #
         #####################################################
@@ -302,11 +294,12 @@ class UFlowElboLoss(nn.modules.Module):
             flow12_2 = self.reparam_diag_inv(mean12_2, log_diag12_2, nsamples=self.cfg.n_samples)
             flow21_2 = self.reparam_diag_inv(mean21_2, log_diag21_2, nsamples=self.cfg.n_samples)
         elif self.cfg.approx == 'sparse' and not self.cfg.inv_cov:
-            flow12_2 = self.reparam_triag(mean12_2, diag12_2, left12_2, over12_2, leftover12_2, nsamples=self.cfg.n_samples)
-            flow21_2 = self.reparam_triag(mean21_2, diag21_2, left21_2, over21_2, leftover12_2, nsamples=self.cfg.n_samples)
+            flow12_2 = self.reparam_triag(mean12_2, full12_2, nsamples=self.cfg.n_samples)
+            flow21_2 = self.reparam_triag(mean21_2, full21_2, nsamples=self.cfg.n_samples)
         elif self.cfg.approx == 'sparse' and self.cfg.inv_cov:
-            flow12_2 = self.reparam_triag_inv(mean12_2, diag12_2, left12_2, over12_2, nsamples=self.cfg.n_samples)
-            flow21_2 = self.reparam_triag_inv(mean21_2, diag21_2, left21_2, over21_2, nsamples=self.cfg.n_samples)
+            raise NotImplementedError("Sparse precision matrix representation is not implemented!")
+            #flow12_2 = self.reparam_triag_inv(mean12_2, diag12_2, left12_2, over12_2, leftover12_2, nsamples=self.cfg.n_samples)
+            #flow21_2 = self.reparam_triag_inv(mean21_2, diag21_2, left21_2, over21_2, leftover21_2, nsamples=self.cfg.n_samples)
         elif self.cfg.approx == 'mixture' and not self.cfg.inv_cov:
             flow12_2 = self.reparam_gmm(mean12_2, diag12_2, weights12, nsamples=self.cfg.n_samples)
             flow21_2 = self.reparam_gmm(mean21_2, diag21_2, weights21, nsamples=self.cfg.n_samples)
@@ -341,13 +334,14 @@ class UFlowElboLoss(nn.modules.Module):
                 loss_entropy += self.cfg.w_entropy * torch.sum(log_diag21_2, dim=1).mean()
         elif self.cfg.approx == 'sparse' and self.cfg.inv_cov:
             if self.cfg.approx_entropy:
-                tmp12 = matrix_vector_product_T(diag12_2.detach(), left12_2.detach(), over12_2.detach(),
-                                                flow12_2 - mean12_2.detach())
-                loss_entropy = self.cfg.w_entropy * torch.sum(tmp12*tmp12/2, dim=1).mean()
-                if self.cfg.with_bk:
-                    tmp21 = matrix_vector_product_T(diag21_2.detach(), left21_2.detach(), over21_2.detach(),
-                                                    flow21_2 - mean21_2.detach())
-                    loss_entropy += self.cfg.w_entropy * torch.sum(tmp21*tmp21/2, dim=1).mean()
+                raise NotImplementedError("Approximate entropy calculation is not implemented!")
+                #tmp12 = matrix_vector_product_T(diag12_2.detach(), left12_2.detach(), over12_2.detach(),
+                #                                flow12_2 - mean12_2.detach())
+                #loss_entropy = self.cfg.w_entropy * torch.sum(tmp12*tmp12/2, dim=1).mean()
+                #if self.cfg.with_bk:
+                #    tmp21 = matrix_vector_product_T(diag21_2.detach(), left21_2.detach(), over21_2.detach(),
+                #                                    flow21_2 - mean21_2.detach())
+                #    loss_entropy += self.cfg.w_entropy * torch.sum(tmp21*tmp21/2, dim=1).mean()
             else:
                 loss_entropy = -self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
                 if self.cfg.with_bk:
