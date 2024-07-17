@@ -183,6 +183,16 @@ class UFlowElboLoss(nn.modules.Module):
         z = mean + std * self.Normal.sample(std.size())
         return z
 
+    def reparam_lowrank(self, mean, std, nsamples=1):
+        mean = mean.repeat(nsamples, 1, 1, 1)
+        std = std.repeat(nsamples, 1, 1, 1)
+        batch, chan, _, _ = std.size()
+        eps = std * self.Normal.sample((batch, chan, 1, 1))
+        eps_u = torch.sum(eps[:, 0::2], dim=1, keepdim=True)
+        eps_v = torch.sum(eps[:, 1::2], dim=1, keepdim=True)
+        z = mean + torch.concat((eps_u, eps_v), dim=1)
+        return z
+
     def forward(self, res_dict, im1_0, im2_0):
         """
         :param output: Multi-scale forward/backward flows n * [B x 4 x h x w]
@@ -234,6 +244,13 @@ class UFlowElboLoss(nn.modules.Module):
             #print("mean, var:", torch.mean(log_diag12_2), torch.std(log_diag12_2))
             #print("mean, var:", torch.mean(log_diag21_2), torch.std(log_diag21_2))
 
+        elif self.cfg.approx == 'lowrank':
+            mean12_2 = res_dict['flows_fw'][2][:, 0:2]
+            std12_2 = res_dict['flows_fw'][2][:, 2:2+2*self.cfg.columns]
+
+            mean21_2 = res_dict['flows_bw'][2][:, 0:2]
+            std21_2 = res_dict['flows_bw'][2][:, 2:2+2*self.cfg.columns]
+
 
         # Apply identity function that implements natural gradient computation #
         ########################################################################
@@ -276,7 +293,7 @@ class UFlowElboLoss(nn.modules.Module):
 
         # Calculate l1 norm of the precision matrix inverse #
         #####################################################
-        K, L = mean12_2.shape[0:2]
+        #K, L = mean12_2.shape[0:2]
         inv_l1norm = 0.0
         # if not self.cfg.diag:
         #     for k in range(K):
@@ -305,6 +322,9 @@ class UFlowElboLoss(nn.modules.Module):
             flow21_2 = self.reparam_gmm(mean21_2, diag21_2, weights21, nsamples=self.cfg.n_samples)
         elif self.cfg.approx == 'mixture' and self.cfg.inv_cov:
             raise NotImplementedError('Inverse covariance parametrization is not implemented for mixture variational approximation.')
+        elif self.cfg.approx == 'lowrank':
+            flow12_2 = self.reparam_lowrank(mean12_2, std12_2, nsamples=self.cfg.n_samples)
+            flow21_2 = self.reparam_lowrank(mean21_2, std21_2, nsamples=self.cfg.n_samples)
 
         # Repeat to take into account number of MC samples #
         ####################################################
@@ -350,6 +370,20 @@ class UFlowElboLoss(nn.modules.Module):
             loss_entropy = -self.cfg.w_entropy * gaussian_mixture_log_pdf(flow12_2, mean12_2, log_diag12_2, weights12).mean()
             if self.cfg.with_bk:
                 loss_entropy -= self.cfg.w_entropy * gaussian_mixture_log_pdf(flow21_2, mean21_2, log_diag21_2, weights21).mean()
+        elif self.cfg.approx == 'lowrank':
+            batch, chan, _, _ = std12_2.size()
+            std12_u = std12_2[:, 0::2].reshape(batch, chan, -1).transpose(1, 2)
+            std12_v = std12_2[:, 1::2].reshape(batch, chan, -1).transpose(1, 2)
+            svals12_u = torch.linalg.svdvals(std12_u)
+            svals12_v = torch.linalg.svdvals(std12_v)
+            loss_entropy = self.cfg.w_entropy * (torch.sum(torch.log(svals12_u), dim=1) + torch.sum(torch.log(svals12_v), dim=1)).mean()
+
+            if self.cfg.with_bk:
+                std21_u = std21_2[:, 0::2].reshape(batch, chan, -1).transpose(1, 2)
+                std21_v = std21_2[:, 1::2].reshape(batch, chan, -1).transpose(1, 2)
+                svals21_u = torch.linalg.svdvals(std21_u)
+                svals21_v = torch.linalg.svdvals(std21_v)
+                loss_entropy += self.cfg.w_entropy * (torch.sum(torch.log(svals21_u), dim=1) + torch.sum(torch.log(svals21_v), dim=1)).mean()
 
         # Data loss on level 0 #
         ########################

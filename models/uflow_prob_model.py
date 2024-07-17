@@ -224,17 +224,29 @@ class PWCProbFlow(nn.Module):
     def upsample_out(self, out):
         if out.size(1) > sum(self._out_channels[0:2]):
             flow, log_diag, rest = torch.split(out, self._out_channels, dim=1)
-            flow_up = uflow_utils.upsample(flow, is_flow=True, align_corners=self._align_corners)
-            log_diag_up = uflow_utils.upsample(log_diag + self._diag_bias, is_flow=False, align_corners=self._align_corners)
-            rest_up = uflow_utils.upsample(rest, is_flow=False, align_corners=self._align_corners)
-            out_up = torch.cat([flow_up, log_diag_up, rest_up], dim=1)
-        elif out.size(1) > self._out_channels[0]:
-            flow, log_diag = torch.split(out, self._out_channels[0:2], dim=1)
-            flow_up = uflow_utils.upsample(flow, is_flow=True, align_corners=self._align_corners)
-            log_diag_up = uflow_utils.upsample(log_diag + self._diag_bias, is_flow=False, align_corners=self._align_corners)
-            out_up = torch.cat([flow_up, log_diag_up], dim=1)
+            list_up = []
+            if self._out_channels[0] > 0:
+                flow_up = uflow_utils.upsample(flow, is_flow=True, align_corners=self._align_corners)
+                list_up.append(flow_up)
+            if self._out_channels[1] > 0:
+                log_diag_up = uflow_utils.upsample(log_diag + self._diag_bias, is_flow=False, align_corners=self._align_corners)
+                list_up.append(log_diag_up)
+            if self._out_channels[2] > 0:
+                rest_up = uflow_utils.upsample(rest, is_flow=False, align_corners=self._align_corners)
+                list_up.append(rest_up)
+
+            out_up = torch.cat(list_up, dim=1)
         else:
-            out_up = uflow_utils.upsample(out, is_flow=True, align_corners=self._align_corners)
+            flow, log_diag = torch.split(out, self._out_channels[0:2], dim=1)
+            list_up = []
+            if self._out_channels[0] > 0:
+                flow_up = uflow_utils.upsample(flow, is_flow=True, align_corners=self._align_corners)
+                list_up.append(flow_up)
+            if self._out_channels[1] > 0:
+                log_diag_up = uflow_utils.upsample(log_diag + self._diag_bias, is_flow=False, align_corners=self._align_corners)
+                list_up.append(log_diag_up)
+
+            out_up = torch.cat(list_up, dim=1)
 
         return out_up
 
