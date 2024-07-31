@@ -330,6 +330,8 @@ class UFlowElboLoss(nn.modules.Module):
         ####################################################
         im1_0 = im1_0.repeat(self.cfg.n_samples, 1, 1, 1)
         im2_0 = im2_0.repeat(self.cfg.n_samples, 1, 1, 1)
+        mean12_2 = mean12_2.repeat(self.cfg.n_samples, 1, 1, 1)
+        mean21_2 = mean21_2.repeat(self.cfg.n_samples, 1, 1, 1)
 
         # Calculate entropy loss #
         ##########################
@@ -371,19 +373,25 @@ class UFlowElboLoss(nn.modules.Module):
             if self.cfg.with_bk:
                 loss_entropy -= self.cfg.w_entropy * gaussian_mixture_log_pdf(flow21_2, mean21_2, log_diag21_2, weights21).mean()
         elif self.cfg.approx == 'lowrank':
-            batch, chan, _, _ = std12_2.size()
-            std12_u = std12_2[:, 0::2].reshape(batch, chan, -1).transpose(1, 2)
-            std12_v = std12_2[:, 1::2].reshape(batch, chan, -1).transpose(1, 2)
-            svals12_u = torch.linalg.svdvals(std12_u)
-            svals12_v = torch.linalg.svdvals(std12_v)
-            loss_entropy = self.cfg.w_entropy * (torch.sum(torch.log(svals12_u), dim=1) + torch.sum(torch.log(svals12_v), dim=1)).mean()
+            batch, chan, height, width = std12_2.size()
+            std12_u = std12_2[:, 0::2].reshape(batch, chan, -1)
+            std12_u2 = torch.linalg.matmul(std12_u, std12_u.transpose(1, 2))
+            std12_v = std12_2[:, 1::2].reshape(batch, chan, -1)
+            std12_v2 = torch.linalg.matmul(std12_v, std12_v.transpose(1, 2))
+            print("det(std12_u2)", torch.det(std12_u2).detach().cpu().tolist())
+            print("det(std12_v2)", torch.det(std12_u2).detach().cpu().tolist())
+            loss_entropy = self.cfg.w_entropy * ((torch.logdet(std12_u2) + torch.logdet(std12_v2)) / (2 * height * width)).mean()
+            #loss_entropy = self.cfg.w_entropy * ((torch.log(torch.det(std12_u2)+1e-6) + torch.log(torch.det(std12_v2)+1e-6)) / (2 * height * width)).mean()
 
             if self.cfg.with_bk:
-                std21_u = std21_2[:, 0::2].reshape(batch, chan, -1).transpose(1, 2)
-                std21_v = std21_2[:, 1::2].reshape(batch, chan, -1).transpose(1, 2)
-                svals21_u = torch.linalg.svdvals(std21_u)
-                svals21_v = torch.linalg.svdvals(std21_v)
-                loss_entropy += self.cfg.w_entropy * (torch.sum(torch.log(svals21_u), dim=1) + torch.sum(torch.log(svals21_v), dim=1)).mean()
+                std21_u = std21_2[:, 0::2].reshape(batch, chan, -1)
+                std21_u2 = torch.linalg.matmul(std21_u, std21_u.transpose(1, 2))
+                std21_v = std21_2[:, 1::2].reshape(batch, chan, -1)
+                std21_v2 = torch.linalg.matmul(std21_v, std21_v.transpose(1, 2))
+                print("det(std21_u2)", torch.det(std21_u2).detach().cpu().tolist())
+                print("det(std21_v2)", torch.det(std21_u2).detach().cpu().tolist())
+                loss_entropy += self.cfg.w_entropy * ((torch.logdet(std21_u2) + torch.logdet(std21_v2)) / (2 * height * width)).mean()
+                #loss_entropy += self.cfg.w_entropy * ((torch.log(torch.det(std21_u2)+1e-6) + torch.log(torch.det(std21_v2)+1e-6)) / (2 * height * width)).mean()
 
         # Data loss on level 0 #
         ########################

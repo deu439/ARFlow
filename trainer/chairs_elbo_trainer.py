@@ -163,29 +163,41 @@ class TrainFramework(BaseTrainer):
                 es = evaluate_flow(gt_flows, pred_flows)
                 error_values += es
 
-                # Evaluate AUC
-                if self.loss_func.cfg.approx == 'diag' and self.cfg.track_auc:
-                    pred_entropies = flows[0][:, 2:4]
-
-                if self.loss_func.cfg.approx == 'mixture' and self.cfg.track_auc:
-                    K = self.loss_func.cfg.n_components
-                    mean = flows[0][:, 0:K*2]
-                    pred_logstd = flows[0][:, K*2:K*2+2]
-                    pred_entropies = mixture_entropy(mean, pred_logstd, n_samples=100)
-
-                if self.loss_func.cfg.approx == 'sparse' and self.cfg.track_auc:
-                    if self.loss_func.cfg.inv_cov:
-                        log_diag = flows[2][:, 2:4]
-                        left = flows[2][:, 4:6, :, :-1]
-                        over = flows[2][:, 6:8, :-1, :]
-                        pred_entropies = inverse_diagonal(torch.exp(log_diag).contiguous(), left.contiguous(), over.contiguous())
-                        pred_entropies = uflow_utils.upsample(pred_entropies + 2*math.log(4), scale_factor=4, is_flow=False, align_corners=False)
-                    else:
+                # Compute entropy of the horizontal and vertical component. If we track AUC this needs to be computed
+                # for each batch, otherwise we compute it only for the last batch.
+                if self.cfg.track_auc or i_step == len(loader) - 1:
+                    if self.loss_func.cfg.approx == 'diag':
                         pred_entropies = flows[0][:, 2:4]
 
+                    elif self.loss_func.cfg.approx == 'mixture':
+                        K = self.loss_func.cfg.n_components
+                        mean = flows[0][:, 0:K*2]
+                        logstd = flows[0][:, K*2:K*2+2]
+                        uv_entropy = mixture_entropy(mean, logstd, n_samples=100)
+
+                    elif self.loss_func.cfg.approx == 'sparse':
+                        if self.loss_func.cfg.inv_cov:
+                            log_diag = flows[2][:, 2:4]
+                            left = flows[2][:, 4:6, :, :-1]
+                            over = flows[2][:, 6:8, :-1, :]
+                            uv_entropy = inverse_diagonal(torch.exp(log_diag).contiguous(), left.contiguous(), over.contiguous())
+                            uv_entropy = uflow_utils.upsample(uv_entropy + 2*math.log(4), scale_factor=4, is_flow=False, align_corners=False)
+                        else:
+                            uv_entropy = flows[0][:, 2:4]
+
+                    elif self.loss_func.cfg.approx == 'lowrank':
+                        std = flows[2][:, 2:2 + 2 * self.loss_func.cfg.columns]
+                        std_u = std[:, 0::2]
+                        std_v = std[:, 1::2]
+                        u_entropy = torch.log(torch.sum(std_u * std_u, dim=1, keepdim=True)) / 2
+                        v_entropy = torch.log(torch.sum(std_v * std_v, dim=1, keepdim=True)) / 2
+                        uv_entropy = torch.concat((u_entropy, v_entropy), dim=1)
+                        uv_entropy = uflow_utils.upsample(uv_entropy + 2 * math.log(4), scale_factor=4, is_flow=False, align_corners=False)
+
+                # Evaluate AUC if needed
                 if self.cfg.track_auc:
-                    pred_entropies = pred_entropies.detach().cpu().numpy().transpose([0, 2, 3, 1])
-                    auc, splot, oplot = evaluate_uncertainty(gt_flows, pred_flows, pred_entropies, sp_samples=self.cfg.sp_samples)
+                    uv_entropy_np = uv_entropy.detach().cpu().numpy().transpose([0, 2, 3, 1])
+                    auc, splot, oplot = evaluate_uncertainty(gt_flows, pred_flows, uv_entropy_np, sp_samples=self.cfg.sp_samples)
                     splots += splot
                     oplots += oplot
                     error_values += auc
@@ -214,7 +226,7 @@ class TrainFramework(BaseTrainer):
             # Record output tensor
             torch.save(flows[2], self.save_root / 'flow_fw_l2_{}.pt'.format(self.i_epoch))
 
-            # write predicted and true flow to tboard
+            # Write predicted and true flow to tboard
             gt_flow = data['target']['flow']
             image = torch_flow2rgb(gt_flow.cpu())
             self.summary_writer.add_images("Valid/gt_{}".format(i_set), image, self.i_epoch)
@@ -236,10 +248,11 @@ class TrainFramework(BaseTrainer):
 
                 self.summary_writer.add_images("Valid/pred_{}_{}".format(i_set, k), image_np, self.i_epoch, dataformats='NHWC')
 
-                entropy = torch.sum(flows[0][:, 2*n_components+2*k:2*n_components+2*(k+1)], axis=1, keepdim=True)
-                entropy -= torch.min(entropy)
-                entropy /= torch.max(entropy)
-                self.summary_writer.add_images("Valid/entropy_{}_{}".format(i_set, k), entropy.cpu(), self.i_epoch, dataformats='NCHW')
+            # Write entropy to tboard
+            entropy = torch.sum(uv_entropy, dim=1, keepdim=True)
+            entropy -= torch.min(entropy)
+            entropy /= torch.max(entropy)
+            self.summary_writer.add_images("Valid/entropy_{}_{}".format(i_set, k), entropy.cpu(), self.i_epoch, dataformats='NCHW')
 
             # Write sparsification plots to tboard
             if len(splots) > 0 and len(oplots) > 0:
