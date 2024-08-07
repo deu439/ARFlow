@@ -42,7 +42,7 @@ class TrainFramework(BaseTrainer):
             flows_12, flows_21 = res_dict['flows_fw'], res_dict['flows_bw']
             flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
                      zip(flows_12, flows_21)]
-            loss, l_ph, l_sm, flow_mean = self.loss_func(flows, img_pair)
+            loss, l_ph, l_sm, flow_mean, mask = self.loss_func(flows, img_pair)
 
             # make sure loss does not contain NaNs
             assert (not np.isnan(loss.item())), "training loss is NaN"
@@ -108,9 +108,16 @@ class TrainFramework(BaseTrainer):
                 gt_flows = data['target']['flow'].numpy().transpose([0, 2, 3, 1])
 
                 # compute output
-                flows = self.model(img_pair)['flows_fw']
-                pred_flows = flows[0].detach().cpu().numpy().transpose([0, 2, 3, 1])
+                res_dict = self.model(img_pair)
 
+                # Evaluate loss
+                flows_12, flows_21 = res_dict['flows_fw'], res_dict['flows_bw']
+                flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
+                         zip(flows_12, flows_21)]
+                loss, l_ph, l_sm, flow_mean, mask = self.loss_func(flows, img_pair)
+
+                # Evaluate prediction
+                pred_flows = flows_12[0].detach().cpu().numpy().transpose([0, 2, 3, 1])
                 es = evaluate_flow(gt_flows, pred_flows)
                 error_meters.update([l.item() for l in es], img_pair.size(0))
 
@@ -136,8 +143,9 @@ class TrainFramework(BaseTrainer):
             gt_flow = data['target']['flow']
             image = torch_flow2rgb(gt_flow.cpu())
             self.summary_writer.add_images(f"Valid/gt", image, self.i_epoch)
-            image = torch_flow2rgb(flows[0].cpu())
-            self.summary_writer.add_images(f"Valid/pred", image, self.i_epoch)
+            image = torch_flow2rgb(flows_12[0].cpu())
+            self.summary_writer.add_images("Valid/pred_{}".format(i_set), image, self.i_epoch)
+            self.summary_writer.add_image("Valid/mask_{}".format(i_set), mask.cpu(), self.i_epoch, dataformats='NCHW')
 
             all_error_avgs.extend(error_meters.avg)
             all_error_names.extend(['{}_{}'.format(name, i_set) for name in error_names])
@@ -146,6 +154,6 @@ class TrainFramework(BaseTrainer):
         # In order to reduce the space occupied during debugging,
         # only the model with more than cfg.save_iter iterations will be saved.
         if self.i_iter > self.cfg.save_iter:
-            self.save_model(all_error_avgs[0], name='Sintel')
+            self.save_model(all_error_avgs[0], name='Chairs')
 
         return all_error_avgs, all_error_names

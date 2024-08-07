@@ -63,8 +63,8 @@ class UFlowLoss(nn.modules.Module):
         weights1_y = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im1_gy), 1, keepdim=True))
 
         flow12_gx, flow12_gy = image_grads(flow12_2)
-        loss_smooth = self.cfg.w_smooth * (torch.mean(weights1_x * robust_l1(flow12_gx))
-                                           + torch.mean(weights1_y * robust_l1(flow12_gy))) / 2.
+        loss_smooth = self.cfg.w_smooth * (torch.mean(weights1_x * robust_l1(flow12_gx**2))
+                                           + torch.mean(weights1_y * robust_l1(flow12_gy**2))) / 2.
         if self.cfg.with_bk:
             # Backward -----------
             im2_gx, im2_gy = image_grads(im2_2.detach())
@@ -72,11 +72,11 @@ class UFlowLoss(nn.modules.Module):
             weights2_y = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im2_gy), 1, keepdim=True))
 
             flow21_gx, flow21_gy = image_grads(flow21_2)
-            loss_smooth += self.cfg.w_smooth * (torch.mean(weights2_x * robust_l1(flow21_gx))
-                                               + torch.mean(weights2_y * robust_l1(flow21_gy))) / 2.
+            loss_smooth += self.cfg.w_smooth * (torch.mean(weights2_x * robust_l1(flow21_gx**2))
+                                               + torch.mean(weights2_y * robust_l1(flow21_gy**2))) / 2.
 
         # Calculate total loss #
         ########################
         total_loss = loss_warp + loss_smooth
 
-        return total_loss, loss_warp, loss_smooth, output[0].abs().mean()
+        return total_loss, loss_warp, loss_smooth, output[0].abs().mean(), mask1

@@ -367,3 +367,7 @@ def ssim_loss(image_a, image_b, mask, patch_size=7):
     
     padded_mask = zero_mask_border(mask, patch_size=patch_size)
     return [d1_sq, d2_sq], padded_mask / (torch.sum(padded_mask.detach()) + 1e-6)
+
+
+def robust_l1(x):
+    return (x + 0.001 ** 2) ** 0.5
