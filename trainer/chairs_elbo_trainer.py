@@ -22,7 +22,7 @@ class TrainFramework(BaseTrainer):
         am_batch_time = AverageMeter()
         am_data_time = AverageMeter()
 
-        key_meter_names = ['Loss', 'l_ph', 'l_sm', 'entropy', 'off_diag']
+        key_meter_names = ['Loss', 'l_ph', 'l_sm', 'entropy', 'l_oof']
         key_meters = AverageMeter(i=len(key_meter_names), precision=4)
 
         self.model.train()
@@ -52,10 +52,10 @@ class TrainFramework(BaseTrainer):
             #flows_12, flows_21 = res_dict['flows_fw'], res_dict['flows_bw']
             #flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
             #         zip(flows_12, flows_21)]
-            loss, l_ph, l_sm, entropy, inv_l1norm, _, _ = self.loss_func(res_dict, img1, img2)
+            loss, l_ph, l_sm, entropy, l_oof, _, _ = self.loss_func(res_dict, img1, img2)
 
             # update meters
-            key_meters.update([loss.item(), l_ph.item(), l_sm.item(), entropy.item(), inv_l1norm], img1.size(0))
+            key_meters.update([loss.item(), l_ph.item(), l_sm.item(), entropy.item(), l_oof], img1.size(0))
 
             # If large l1norm is detected, use lower learning rate
             # if inv_l1norm > 100.0:
@@ -135,7 +135,7 @@ class TrainFramework(BaseTrainer):
 
         n_step = 0
         for i_set, loader in enumerate(self.valid_loader):
-            error_names = ['Loss', 'l_ph', 'l_sm', 'entropy', 'inv_l1norm', 'EPE']
+            error_names = ['Loss', 'l_ph', 'l_sm', 'entropy', 'l_oof', 'EPE']
             if self.cfg.track_auc:
                 error_names += ['AUC', 'AUC_diff']
             error_meters = AverageMeter(i=len(error_names))
@@ -154,8 +154,8 @@ class TrainFramework(BaseTrainer):
                 #flows_12, flows_21 = res_dict['flows_fw'], res_dict['flows_bw']
                 #flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
                 #         zip(flows_12, flows_21)]
-                loss, l_ph, l_sm, entropy, inv_l1norm, sample_flows, sample_masks,  = self.loss_func(res_dict, img1, img2)
-                error_values = [loss, l_ph, l_sm, entropy, inv_l1norm]
+                loss, l_ph, l_sm, entropy, l_oof, sample_flows, sample_masks,  = self.loss_func(res_dict, img1, img2)
+                error_values = [loss, l_ph, l_sm, entropy, l_oof]
 
                 # Evaluate endpoint error
                 flows = res_dict['flows_fw']
@@ -167,7 +167,7 @@ class TrainFramework(BaseTrainer):
                 # for each batch, otherwise we compute it only for the last batch.
                 if self.cfg.track_auc or i_step == len(loader) - 1:
                     if self.loss_func.cfg.approx == 'diag':
-                        pred_entropies = flows[0][:, 2:4]
+                        uv_entropy = flows[0][:, 2:4]
 
                     elif self.loss_func.cfg.approx == 'mixture':
                         K = self.loss_func.cfg.n_components

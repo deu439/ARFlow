@@ -444,10 +444,26 @@ class UFlowElboLoss(nn.modules.Module):
             loss_smooth += torch.mean(smooth_weight21_x * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss21_x**2, dim=1))) \
                           + torch.mean(smooth_weight21_y * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss21_y**2, dim=1)))
 
+        # Out of frame penalization #
+        #############################
+        loss_oof = 0
+        if self.cfg.w_oof > 0.0:
+            warp12_2 = flow_to_warp(flow12_2)
+            max_height = float(warp12_2.shape[2] - 1)
+            max_width = float(warp12_2.shape[3] - 1)
+            loss_oof_u = torch.clamp_max(warp12_2[:, 0, :, :], max=0)**2 + torch.clamp_min(warp12_2[:, 0, :, :] - max_width, min=0)**2
+            loss_oof_v = torch.clamp_max(warp12_2[:, 1, :, :], max=0)**2 + torch.clamp_min(warp12_2[:, 1, :, :] - max_height, min=0)**2
+            loss_oof = self.cfg.w_oof * (loss_oof_u + loss_oof_v).mean()
+            if self.cfg.with_bk:
+                warp21_2 = flow_to_warp(flow21_2)
+                loss_oof_u = torch.clamp_max(warp21_2[:, 0, :, :], max=0)**2 + torch.clamp_min(warp21_2[:, 0, :, :] - max_width, min=0)**2
+                loss_oof_v = torch.clamp_max(warp21_2[:, 1, :, :], max=0)**2 + torch.clamp_min(warp21_2[:, 1, :, :] - max_height, min=0)**2
+                loss_oof += self.cfg.w_oof * (loss_oof_u + loss_oof_v).mean()
+
         # Calculate total loss #
         ########################
-        total_loss = loss_warp + loss_smooth - loss_entropy
+        total_loss = loss_warp + loss_smooth - loss_entropy + loss_oof
         if self.cfg.approx == 'sparse':
             total_loss += self.cfg.offdiag_reg*loss_offdiag
 
-        return total_loss, loss_warp, loss_smooth, loss_entropy, loss_offdiag, flow12_2, mask12
+        return total_loss, loss_warp, loss_smooth, loss_entropy, loss_oof, flow12_2, mask12
