@@ -52,7 +52,7 @@ class TrainFramework(BaseTrainer):
             #flows_12, flows_21 = res_dict['flows_fw'], res_dict['flows_bw']
             #flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
             #         zip(flows_12, flows_21)]
-            loss, l_ph, l_sm, entropy, l_oof, _, _ = self.loss_func(res_dict, img1, img2)
+            loss, l_ph, l_sm, entropy, l_oof, _, _, _ = self.loss_func(res_dict, img1, img2)
 
             # update meters
             key_meters.update([loss.item(), l_ph.item(), l_sm.item(), entropy.item(), l_oof], img1.size(0))
@@ -154,7 +154,7 @@ class TrainFramework(BaseTrainer):
                 #flows_12, flows_21 = res_dict['flows_fw'], res_dict['flows_bw']
                 #flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
                 #         zip(flows_12, flows_21)]
-                loss, l_ph, l_sm, entropy, l_oof, sample_flows, sample_masks,  = self.loss_func(res_dict, img1, img2)
+                loss, l_ph, l_sm, entropy, l_oof, sample_flows, occu_mask, valid_mask  = self.loss_func(res_dict, img1, img2)
                 error_values = [loss, l_ph, l_sm, entropy, l_oof]
 
                 # Evaluate endpoint error
@@ -269,7 +269,8 @@ class TrainFramework(BaseTrainer):
             # Write sample images and the corresponding pixel weights
             sample_flows_image = torch_flow2rgb(sample_flows.detach().cpu())
             self.summary_writer.add_image("Valid/sample_flows_{}".format(i_set), sample_flows_image.cpu(), self.i_epoch, dataformats='NCHW')
-            self.summary_writer.add_image("Valid/sample_masks_{}".format(i_set), sample_masks.cpu(), self.i_epoch, dataformats='NCHW')
+            self.summary_writer.add_image("Valid/occu_masks_{}".format(i_set), occu_mask.cpu(), self.i_epoch, dataformats='NCHW')
+            self.summary_writer.add_image("Valid/valid_masks_{}".format(i_set), valid_mask.cpu(), self.i_epoch, dataformats='NCHW')
 
             all_error_avgs.extend(error_meters.avg)
             all_error_names.extend(['{}_{}'.format(name, i_set) for name in error_names])
