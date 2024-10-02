@@ -238,16 +238,6 @@ def image_grads(image_batch, stride=1):
     return image_batch_x, image_batch_y
 
 
-def abs_robust_loss(diff, eps=0.01, q=0.4):
-    return torch.pow((torch.abs(diff) + eps), q)
-
-
-def charbonnier(x_sq, eps=0.001):
-    if type(x_sq) is list:
-        x_sq = sum(x_sq)
-
-    return torch.sqrt(x_sq + eps**2)
-
 
 def compute_loss(i1, warped2, flow, use_mag_loss=False):
     loss = torch.nn.functional.l1_loss(warped2, i1)

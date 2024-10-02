@@ -36,11 +36,14 @@ class UFlowLoss(nn.modules.Module):
         # Calculate border and occlusion masks #
         ########################################
         valid_mask1 = mask_invalid(warp12_0)
-        occu_mask1 = torch.clamp(compute_range_map(flow21_0), min=0., max=1.)
+        # Calculate occlusion masks at level 2 and then upsample!
+        occu_mask1 = torch.clamp(compute_range_map(flow21_2), min=0., max=1.)
+        occu_mask1 = F.interpolate(occu_mask1, scale_factor=4, mode='bilinear', align_corners=self.cfg.align_corners)
         mask1 = torch.detach(occu_mask1 * valid_mask1)
         if self.cfg.with_bk:
             valid_mask2 = mask_invalid(warp21_0)
-            occu_mask2 = torch.clamp(compute_range_map(flow12_0), min=0., max=1.)
+            occu_mask2 = torch.clamp(compute_range_map(flow12_2), min=0., max=1.)
+            occu_mask2 = F.interpolate(occu_mask2, scale_factor=4, mode='bilinear', align_corners=self.cfg.align_corners)
             mask2 = torch.detach(occu_mask2 * valid_mask2)
 
         # Calculate photometric loss on level 0 #

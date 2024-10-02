@@ -6,9 +6,10 @@ from torch.autograd.function import once_differentiable
 
 import math
 
-from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_invalid, census_loss_no_penalty, image_grads, abs_robust_loss, upsample, ssim_loss, charbonnier
+from utils.uflow_utils import flow_to_warp, resample2, compute_range_map, mask_invalid, census_loss_no_penalty, image_grads, upsample, ssim_loss
 from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product_general, matrix_vector_product_T_general, NaturalGradientIdentityT, NaturalGradientIdentityC
 from utils.misc_utils import gaussian_mixture_log_pdf
+from .penalty_functions import get_penalty
 
 
 def data_loss_no_penalty(im1_0, im2_0, flow12_2, flow21_2, align_corners, occ_type, data_loss, mean12_2=None, mean21_2=None):
@@ -38,20 +39,22 @@ def data_loss_no_penalty(im1_0, im2_0, flow12_2, flow21_2, align_corners, occ_ty
     ########################################
     if occ_type == 'mean':
         mean12_0 = upsample(mean12_2, scale_factor=4, is_flow=True, align_corners=align_corners)
-        mean21_0 = upsample(mean21_2, scale_factor=4, is_flow=True, align_corners=align_corners)
-
         mean_warp12_0 = flow_to_warp(mean12_0)
-        valid_mask1 = mask_invalid(mean_warp12_0)
-        occu_mask1 = torch.clamp(compute_range_map(mean21_0), min=0., max=1.)
-        mask1 = torch.detach(occu_mask1 * valid_mask1)
+        valid_mask_0 = mask_invalid(mean_warp12_0)
+        # Compute occlusion at level 2 and the upsample!
+        occu_mask_2 = torch.clamp(compute_range_map(mean21_2), min=0., max=1.)
+        occu_mask_0 = upsample(occu_mask_2, scale_factor=4, is_flow=False, align_corners=align_corners)
+        mask_0 = torch.detach(occu_mask_0 * valid_mask_0)
 
     elif occ_type == 'sample':
-        valid_mask1 = mask_invalid(warp12_0)
-        occu_mask1 = torch.clamp(compute_range_map(flow21_0), min=0., max=1.)
-        mask1 = torch.detach(occu_mask1 * valid_mask1)
+        valid_mask_0 = mask_invalid(warp12_0)
+        # Compute occlusion at level 2 and the upsample!
+        occu_mask_2 = torch.clamp(compute_range_map(flow21_2), min=0., max=1.)
+        occu_mask_0 = upsample(occu_mask_2, scale_factor=4, is_flow=False, align_corners=align_corners)
+        mask_0 = torch.detach(occu_mask_0 * valid_mask_0)
 
     elif occ_type == 'none':
-        mask1 = torch.detach(mask_invalid(warp12_0))
+        mask_0 = torch.detach(mask_invalid(warp12_0))
 
     else:
         raise NotImplementedError('Occlusion type {} not implemented!'.format(occ_type))
@@ -62,14 +65,14 @@ def data_loss_no_penalty(im1_0, im2_0, flow12_2, flow21_2, align_corners, occ_ty
     pixel_weight = []
     for type in data_loss:
         if type == "census":
-            l, w = census_loss_no_penalty(im1_0, im1_recons, mask1)
+            l, w = census_loss_no_penalty(im1_0, im1_recons, mask_0)
         elif type == "ssim":
-            l, w = ssim_loss(im1_0, im1_recons, mask1)
+            l, w = ssim_loss(im1_0, im1_recons, mask_0)
 
         pixel_loss.append(l)
         pixel_weight.append(w)
 
-    return pixel_loss, pixel_weight, mask1
+    return pixel_loss, pixel_weight, occu_mask_2, valid_mask_0
 
 
 def smooth_loss_no_penalty(im1_0, flow12_2, align_corners, edge_constant, edge_asymp):
@@ -330,17 +333,17 @@ class UFlowElboLoss(nn.modules.Module):
         ####################################################
         im1_0 = im1_0.repeat(self.cfg.n_samples, 1, 1, 1)
         im2_0 = im2_0.repeat(self.cfg.n_samples, 1, 1, 1)
-        mean12_2 = mean12_2.repeat(self.cfg.n_samples, 1, 1, 1)
-        mean21_2 = mean21_2.repeat(self.cfg.n_samples, 1, 1, 1)
+        mean12_2_rep = mean12_2.repeat(self.cfg.n_samples, 1, 1, 1)
+        mean21_2_rep = mean21_2.repeat(self.cfg.n_samples, 1, 1, 1)
 
         # Calculate entropy loss #
         ##########################
         if self.cfg.approx == 'diag' and not self.cfg.inv_cov:
             if self.cfg.approx_entropy:
-                tmp12 = (flow12_2 - mean12_2.detach()) / diag12_2.detach()
+                tmp12 = (flow12_2 - mean12_2_rep.detach()) / diag12_2.detach()
                 loss_entropy = self.cfg.w_entropy * torch.sum(tmp12*tmp12/2, dim=1).mean()
                 if self.cfg.with_bk:
-                    tmp21 = (flow21_2 - mean21_2.detach()) / diag21_2.detach()
+                    tmp21 = (flow21_2 - mean21_2_rep.detach()) / diag21_2.detach()
                     loss_entropy += self.cfg.w_entropy * torch.sum(tmp21*tmp21/2, dim=1).mean()
             else:
                 loss_entropy = self.cfg.w_entropy * torch.sum(log_diag12_2, dim=1).mean()
@@ -374,22 +377,22 @@ class UFlowElboLoss(nn.modules.Module):
                 loss_entropy -= self.cfg.w_entropy * gaussian_mixture_log_pdf(flow21_2, mean21_2, log_diag21_2, weights21).mean()
         elif self.cfg.approx == 'lowrank':
             batch, chan, height, width = std12_2.size()
-            std12_u = std12_2[:, 0::2].reshape(batch, chan, -1)
+            std12_u = std12_2[:, 0::2].reshape(batch, chan//2, height*width)
             std12_u2 = torch.linalg.matmul(std12_u, std12_u.transpose(1, 2))
-            std12_v = std12_2[:, 1::2].reshape(batch, chan, -1)
+            std12_v = std12_2[:, 1::2].reshape(batch, chan//2, height*width)
             std12_v2 = torch.linalg.matmul(std12_v, std12_v.transpose(1, 2))
-            print("det(std12_u2)", torch.det(std12_u2).detach().cpu().tolist())
-            print("det(std12_v2)", torch.det(std12_u2).detach().cpu().tolist())
+            #print("logdet(std12_u2)", torch.logdet(std12_u2).detach().cpu().tolist())
+            #print("logdet(std12_v2)", torch.logdet(std12_u2).detach().cpu().tolist())
             loss_entropy = self.cfg.w_entropy * ((torch.logdet(std12_u2) + torch.logdet(std12_v2)) / (2 * height * width)).mean()
             #loss_entropy = self.cfg.w_entropy * ((torch.log(torch.det(std12_u2)+1e-6) + torch.log(torch.det(std12_v2)+1e-6)) / (2 * height * width)).mean()
 
             if self.cfg.with_bk:
-                std21_u = std21_2[:, 0::2].reshape(batch, chan, -1)
+                std21_u = std21_2[:, 0::2].reshape(batch, chan//2, height*width)
                 std21_u2 = torch.linalg.matmul(std21_u, std21_u.transpose(1, 2))
-                std21_v = std21_2[:, 1::2].reshape(batch, chan, -1)
+                std21_v = std21_2[:, 1::2].reshape(batch, chan//2, height*width)
                 std21_v2 = torch.linalg.matmul(std21_v, std21_v.transpose(1, 2))
-                print("det(std21_u2)", torch.det(std21_u2).detach().cpu().tolist())
-                print("det(std21_v2)", torch.det(std21_u2).detach().cpu().tolist())
+                #print("logdet(std21_u2)", torch.logdet(std21_u2).detach().cpu().tolist())
+                #print("logdet(std21_v2)", torch.logdet(std21_u2).detach().cpu().tolist())
                 loss_entropy += self.cfg.w_entropy * ((torch.logdet(std21_u2) + torch.logdet(std21_v2)) / (2 * height * width)).mean()
                 #loss_entropy += self.cfg.w_entropy * ((torch.log(torch.det(std21_u2)+1e-6) + torch.log(torch.det(std21_v2)+1e-6)) / (2 * height * width)).mean()
 
@@ -397,52 +400,89 @@ class UFlowElboLoss(nn.modules.Module):
         ########################
         penalty_list = []
         for type in self.cfg.data_penalty:
-            if type == "identity":
-                penalty_list.append(lambda x: x)
-            elif type == "abs_robust_loss":
-                penalty_list.append(abs_robust_loss)
-            elif type == "gmm":
-                penalty_list.append(lambda x: -log_gmm(x, self.cfg.penalty_census_pi, self.cfg.penalty_census_beta))
-            elif type == "charbonnier":
-                penalty_list.append(charbonnier)
+            penalty_list.append(get_penalty(type))
 
         loss_warp = 0
-        data_pixel_loss12, data_pixel_weight12, mask12 = data_loss_no_penalty(
+        data_pixel_loss12, data_pixel_weight12, occu_mask12, valid_mask12 = data_loss_no_penalty(
             im1_0, im2_0, flow12_2, flow21_2, self.cfg.align_corners, self.cfg.occ_type, self.cfg.data_loss,
-            mean12_2, mean21_2
+            mean12_2_rep, mean21_2_rep
         )
         for pixel_loss, pixel_weight, weight, penalty in zip(data_pixel_loss12, data_pixel_weight12, self.cfg.data_weight, penalty_list):
             loss_warp += torch.sum(pixel_weight * weight * penalty(pixel_loss))
 
         if self.cfg.with_bk:
             # Here the arguments are passed in reversed order!
-            data_pixel_loss21, data_pixel_weight21, _ = data_loss_no_penalty(
+            data_pixel_loss21, data_pixel_weight21, occu_mask21, _ = data_loss_no_penalty(
                 im2_0, im1_0, flow21_2, flow12_2, self.cfg.align_corners, self.cfg.occ_type, self.cfg.data_loss,
-                mean21_2, mean12_2
+                mean21_2_rep, mean12_2_rep
             )
             for pixel_loss, pixel_weight, weight, penalty in zip(data_pixel_loss21, data_pixel_weight21, self.cfg.data_weight, penalty_list):
                 loss_warp += torch.sum(pixel_weight * weight * penalty(pixel_loss))
 
         # Smoothness loss on level 2 #
         ##############################
-        if self.cfg.penalty_smooth == "charbonnier":
-            penalty_func_smooth = charbonnier
-        elif self.cfg.penalty_smooth == "gmm":
-            penalty_func_smooth = lambda x: -log_gmm(x, self.cfg.penalty_smooth_pi, self.cfg.penalty_smooth_beta)
+        if self.cfg.closed_form_smooth:
+            if self.cfg.approx == 'diag':
+                # Get the weights
+                _, smooth_weight12_x, _, smooth_weight12_y = smooth_loss_no_penalty(
+                    im1_0, flow12_2, self.cfg.align_corners, self.cfg.edge_constant, self.cfg.edge_asymp
+                )
 
-        smooth_loss12_x, smooth_weight12_x, smooth_loss12_y, smooth_weight12_y = smooth_loss_no_penalty(
-            im1_0, flow12_2, self.cfg.align_corners, self.cfg.edge_constant, self.cfg.edge_asymp
-        )
-        # In contrast to data loss, the smoothness loss is AVERAGED over pixels (comes from the UFlow code)
-        loss_smooth = torch.mean(smooth_weight12_x * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss12_x**2, dim=1))) \
-                      + torch.mean(smooth_weight12_y * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss12_y**2, dim=1)))
-        if self.cfg.with_bk:
-            # Here the arguments are passed in reversed order!
-            smooth_loss21_x, smooth_weight21_x, smooth_loss21_y, smooth_weight21_y = smooth_loss_no_penalty(
-                im2_0, flow21_2, self.cfg.align_corners, self.cfg.edge_constant, self.cfg.edge_asymp
+                # Get the expected values of the squared differences
+                E12_x = (mean12_2[:, :, :, 1:]**2 + diag12_2[:, :, :, 1:]**2
+                           - 2*mean12_2[:, :, :, 1:]*mean12_2[:, :, :, :-1]
+                           + mean12_2[:, :, :, :-1]**2 + diag12_2[:, :, :, :-1]**2)
+                E12_y = (mean12_2[:, :, 1:] ** 2 + diag12_2[:, :, 1:] ** 2
+                           - 2 * mean12_2[:, :, 1:] * mean12_2[:, :, :-1]
+                           + mean12_2[:, :, :-1] ** 2 + diag12_2[:, :, :-1] ** 2)
+
+                E12_x = torch.mean(E12_x, dim=1)
+                E12_y = torch.mean(E12_y, dim=1)
+
+                penalty_func_smooth = get_penalty(self.cfg.penalty_smooth)
+                loss_smooth = torch.mean(smooth_weight12_x * self.cfg.w_smooth * penalty_func_smooth(E12_x)) \
+                              + torch.mean(smooth_weight12_y * self.cfg.w_smooth * penalty_func_smooth(E12_y))
+
+                if self.cfg.with_bk:
+                    # Get the weights
+                    _, smooth_weight21_x, _, smooth_weight21_y = smooth_loss_no_penalty(
+                        im2_0, flow21_2, self.cfg.align_corners, self.cfg.edge_constant, self.cfg.edge_asymp
+                    )
+
+                    # Get the expected values of the squared differences
+                    E21_x = (mean21_2[:, :, :, 1:] ** 2 + diag21_2[:, :, :, 1:] ** 2
+                               - 2 * mean21_2[:, :, :, 1:] * mean21_2[:, :, :, :-1]
+                               + mean21_2[:, :, :, :-1] ** 2 + diag21_2[:, :, :, :-1] ** 2)
+                    E21_y = (mean21_2[:, :, 1:] ** 2 + diag21_2[:, :, 1:] ** 2
+                               - 2 * mean21_2[:, :, 1:] * mean21_2[:, :, :-1]
+                               + mean21_2[:, :, :-1] ** 2 + diag21_2[:, :, :-1] ** 2)
+
+                    E21_x = torch.mean(E21_x, dim=1)
+                    E21_y = torch.mean(E21_y, dim=1)
+
+                    # Compute optimal variational parameters and the loss
+                    loss_smooth += torch.mean(smooth_weight21_x * self.cfg.w_smooth * penalty_func_smooth(E21_x)) \
+                                  + torch.mean(smooth_weight21_y * self.cfg.w_smooth * penalty_func_smooth(E21_y))
+
+            else:
+                raise NotImplementedError()
+
+        else:
+            penalty_func_smooth = get_penalty(self.cfg.penalty_smooth)
+
+            smooth_loss12_x, smooth_weight12_x, smooth_loss12_y, smooth_weight12_y = smooth_loss_no_penalty(
+                im1_0, flow12_2, self.cfg.align_corners, self.cfg.edge_constant, self.cfg.edge_asymp
             )
-            loss_smooth += torch.mean(smooth_weight21_x * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss21_x**2, dim=1))) \
-                          + torch.mean(smooth_weight21_y * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss21_y**2, dim=1)))
+            # In contrast to data loss, the smoothness loss is AVERAGED over pixels (comes from the UFlow code)
+            loss_smooth = torch.mean(smooth_weight12_x * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss12_x**2, dim=1))) \
+                          + torch.mean(smooth_weight12_y * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss12_y**2, dim=1)))
+            if self.cfg.with_bk:
+                # Here the arguments are passed in reversed order!
+                smooth_loss21_x, smooth_weight21_x, smooth_loss21_y, smooth_weight21_y = smooth_loss_no_penalty(
+                    im2_0, flow21_2, self.cfg.align_corners, self.cfg.edge_constant, self.cfg.edge_asymp
+                )
+                loss_smooth += torch.mean(smooth_weight21_x * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss21_x**2, dim=1))) \
+                              + torch.mean(smooth_weight21_y * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss21_y**2, dim=1)))
 
         # Out of frame penalization #
         #############################
@@ -460,10 +500,21 @@ class UFlowElboLoss(nn.modules.Module):
                 loss_oof_v = torch.clamp_max(warp21_2[:, 1, :, :], max=0)**2 + torch.clamp_min(warp21_2[:, 1, :, :] - max_height, min=0)**2
                 loss_oof += self.cfg.w_oof * (loss_oof_u + loss_oof_v).mean()
 
+        # Occlusion penalization #
+        ##########################
+        loss_occ = 0
+        if self.cfg.w_occ > 0.0:
+            def occu_penalty(x, alpha=100.0):
+                return 1 / (alpha * x + 1)
+
+            loss_occ = self.cfg.w_occ * (occu_penalty(occu_mask12) * torch.square(flow12_2)).mean()
+            if self.cfg.with_bk:
+                loss_occ += self.cfg.w_occ * (occu_penalty(occu_mask21) * torch.square(flow21_2)).mean()
+
         # Calculate total loss #
         ########################
-        total_loss = loss_warp + loss_smooth - loss_entropy + loss_oof
+        total_loss = loss_warp + loss_smooth - loss_entropy + loss_oof + loss_occ
         if self.cfg.approx == 'sparse':
             total_loss += self.cfg.offdiag_reg*loss_offdiag
 
-        return total_loss, loss_warp, loss_smooth, loss_entropy, loss_oof, flow12_2, mask12
+        return total_loss, loss_warp, loss_smooth, loss_entropy, loss_oof, flow12_2, occu_mask12, valid_mask12
