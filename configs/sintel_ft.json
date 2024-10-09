@@ -1,4 +1,4 @@
-{"data": {"root_sintel": "/home/deu/Datasets/Sintel",
+{"data": {"root_sintel": "/home/deu/Sintel",
           "run_at": false,
           "test_shape": [448, 1024],
           "train_n_frames": 2,

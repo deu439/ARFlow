@@ -429,12 +429,14 @@ class UFlowElboLoss(nn.modules.Module):
                 )
 
                 # Get the expected values of the squared differences
-                E12_x = (mean12_2[:, :, :, 1:]**2 + diag12_2[:, :, :, 1:]**2
-                           - 2*mean12_2[:, :, :, 1:]*mean12_2[:, :, :, :-1]
-                           + mean12_2[:, :, :, :-1]**2 + diag12_2[:, :, :, :-1]**2)
-                E12_y = (mean12_2[:, :, 1:] ** 2 + diag12_2[:, :, 1:] ** 2
-                           - 2 * mean12_2[:, :, 1:] * mean12_2[:, :, :-1]
-                           + mean12_2[:, :, :-1] ** 2 + diag12_2[:, :, :-1] ** 2)
+                #E12_x = (mean12_2[:, :, :, 1:]**2 + diag12_2[:, :, :, 1:]**2
+                #           - 2*mean12_2[:, :, :, 1:]*mean12_2[:, :, :, :-1]
+                #           + mean12_2[:, :, :, :-1]**2 + diag12_2[:, :, :, :-1]**2)
+                E12_x = (mean12_2[:, :, :, 1:] - mean12_2[:, :, :, :-1])**2 + diag12_2[:, :, :, 1:]**2 + diag12_2[:, :, :, :-1]**2
+                #E12_y = (mean12_2[:, :, 1:] ** 2 + diag12_2[:, :, 1:] ** 2
+                #           - 2 * mean12_2[:, :, 1:] * mean12_2[:, :, :-1]
+                #           + mean12_2[:, :, :-1] ** 2 + diag12_2[:, :, :-1] ** 2)
+                E12_y = (mean12_2[:, :, 1:] - mean12_2[:, :, :-1])**2 + diag12_2[:, :, 1:]**2 + diag12_2[:, :, :-1]**2
 
                 E12_x = torch.mean(E12_x, dim=1)
                 E12_y = torch.mean(E12_y, dim=1)
@@ -450,12 +452,14 @@ class UFlowElboLoss(nn.modules.Module):
                     )
 
                     # Get the expected values of the squared differences
-                    E21_x = (mean21_2[:, :, :, 1:] ** 2 + diag21_2[:, :, :, 1:] ** 2
-                               - 2 * mean21_2[:, :, :, 1:] * mean21_2[:, :, :, :-1]
-                               + mean21_2[:, :, :, :-1] ** 2 + diag21_2[:, :, :, :-1] ** 2)
-                    E21_y = (mean21_2[:, :, 1:] ** 2 + diag21_2[:, :, 1:] ** 2
-                               - 2 * mean21_2[:, :, 1:] * mean21_2[:, :, :-1]
-                               + mean21_2[:, :, :-1] ** 2 + diag21_2[:, :, :-1] ** 2)
+                    #E21_x = (mean21_2[:, :, :, 1:] ** 2 + diag21_2[:, :, :, 1:] ** 2
+                    #           - 2 * mean21_2[:, :, :, 1:] * mean21_2[:, :, :, :-1]
+                    #           + mean21_2[:, :, :, :-1] ** 2 + diag21_2[:, :, :, :-1] ** 2)
+                    E21_x = (mean21_2[:, :, :, 1:] - mean21_2[:, :, :, :-1]) ** 2 + diag21_2[:, :, :, 1:] ** 2 + diag21_2[:, :, :, :-1] ** 2
+                    #E21_y = (mean21_2[:, :, 1:] ** 2 + diag21_2[:, :, 1:] ** 2
+                    #           - 2 * mean21_2[:, :, 1:] * mean21_2[:, :, :-1]
+                    #           + mean21_2[:, :, :-1] ** 2 + diag21_2[:, :, :-1] ** 2)
+                    E21_y = (mean21_2[:, :, 1:] - mean21_2[:, :, :-1]) ** 2 + diag21_2[:, :, 1:] ** 2 + diag21_2[:, :, :-1] ** 2
 
                     E21_x = torch.mean(E21_x, dim=1)
                     E21_y = torch.mean(E21_y, dim=1)
@@ -491,8 +495,8 @@ class UFlowElboLoss(nn.modules.Module):
             warp12_2 = flow_to_warp(flow12_2)
             max_height = float(warp12_2.shape[2] - 1)
             max_width = float(warp12_2.shape[3] - 1)
-            loss_oof_u = torch.clamp_max(warp12_2[:, 0, :, :], max=0)**2 + torch.clamp_min(warp12_2[:, 0, :, :] - max_width, min=0)**2
-            loss_oof_v = torch.clamp_max(warp12_2[:, 1, :, :], max=0)**2 + torch.clamp_min(warp12_2[:, 1, :, :] - max_height, min=0)**2
+            loss_oof_u = torch.clamp(warp12_2[:, 0, :, :], max=0)**2 + torch.clamp(warp12_2[:, 0, :, :] - max_width, min=0)**2
+            loss_oof_v = torch.clamp(warp12_2[:, 1, :, :], max=0)**2 + torch.clamp(warp12_2[:, 1, :, :] - max_height, min=0)**2
             loss_oof = self.cfg.w_oof * (loss_oof_u + loss_oof_v).mean()
             if self.cfg.with_bk:
                 warp21_2 = flow_to_warp(flow21_2)

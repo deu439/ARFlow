@@ -21,7 +21,7 @@
           "data_penalty": ["abs_robust_loss"],
           "w_entropy": 5.0,
           "w_oof": 1.0,
-          "w_occ": 1.0,
+          "w_occ": 5.0,
           "with_bk": true,
           "align_corners": false,
           "approx": "lowrank",
