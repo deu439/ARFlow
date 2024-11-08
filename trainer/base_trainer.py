@@ -116,8 +116,8 @@ class BaseTrainer:
                               betas=(self.cfg.momentum, self.cfg.beta))
         elif self.cfg.optim == 'adam':
             optimizer = torch.optim.Adam(param_groups, self.cfg.lr,
-                                         betas=(self.cfg.momentum, self.cfg.beta),
-                                         eps=1e-7)
+                                         betas=(self.cfg.beta1, self.cfg.beta2),
+                                         eps=self.cfg.eps)
         elif self.cfg.optim == 'sgd':
             optimizer = torch.optim.SGD(param_groups, self.cfg.lr,
                                         momentum=self.cfg.momentum)
