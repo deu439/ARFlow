@@ -1,24 +1,22 @@
  {"data": [
-   {"root_chairs": "/home/deu/Datasets/FlyingChairs_release/data",
-    "split": "train",
-    "type": "Chairs",
-    "n_frames": 2,
-    "at_cfg": {"cj": true,
-             "cj_bri": 0.5,
-             "cj_con": 0.5,
-             "cj_hue": 0.5,
-             "cj_sat": 0.5,
-             "gamma": true,
-             "gblur": false}},
+   {
+     "root_chairs": "/home/deu/Datasets/FlyingChairs_release/data",
+     "split": "train",
+     "type": "Chairs",
+     "n_frames": 2,
+     "geometric_aug": {
+       "hflip": true
+     },
+     "photometric_aug": {
+       "hue": 0.5,
+       "swap_channels": true
+     }
+   },
    {"root_chairs": "/home/deu/Datasets/FlyingChairs_release/data",
      "split": "valid",
      "type": "Chairs",
-     "test_shape": [384, 512],
      "n_frames": 2}
  ],
-  "data_aug": {"crop": false,
-               "hflip": true,
-               "swap": true},
  "loss": {"edge_constant": 150,
           "type": "uflow",
           "w_smooth": 4.0,

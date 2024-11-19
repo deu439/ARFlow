@@ -138,10 +138,10 @@ def evaluate_flow(gt_flows, pred_flows, moving_masks=None):
         pred_flow[:, :, 0] = pred_flow[:, :, 0] / w * W
         pred_flow[:, :, 1] = pred_flow[:, :, 1] / h * H
 
-        flo_pred = cv2.resize(pred_flow, (W, H), interpolation=cv2.INTER_LINEAR)
+        #flo_pred = cv2.resize(pred_flow, (W, H), interpolation=cv2.INTER_LINEAR)
 
         epe_map = np.sqrt(
-            np.sum(np.square(flo_pred[:, :, :2] - gt_flow[:, :, :2]), axis=2))
+            np.sum(np.square(pred_flow[:, :, :2] - gt_flow[:, :, :2]), axis=2))
         if gt_flow.shape[-1] == 2:
             error += np.mean(epe_map)
 
@@ -233,11 +233,11 @@ def evaluate_uncertainty(gt_flows, pred_flows, pred_entropies, sp_samples=25):
         H, W = gt_flow.shape[:2]
 
         # Resample flow
-        h, w = pred_flow.shape[:2]
-        pred_flow = np.copy(pred_flow)
-        pred_flow[:, :, 0] = pred_flow[:, :, 0] / w * W
-        pred_flow[:, :, 1] = pred_flow[:, :, 1] / h * H
-        flo_pred = cv2.resize(pred_flow, (W, H), interpolation=cv2.INTER_LINEAR)
+        #h, w = pred_flow.shape[:2]
+        #pred_flow = np.copy(pred_flow)
+        #pred_flow[:, :, 0] = pred_flow[:, :, 0] / w * W
+        #pred_flow[:, :, 1] = pred_flow[:, :, 1] / h * H
+        #flo_pred = cv2.resize(pred_flow, (W, H), interpolation=cv2.INTER_LINEAR)
 
         # Resample entropy
         pred_entropy = np.copy(pred_entropy)

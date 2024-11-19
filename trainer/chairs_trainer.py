@@ -30,18 +30,27 @@ class TrainFramework(BaseTrainer):
         for i_step, data in enumerate(self.train_loader):
             if i_step > self.cfg.epoch_size:
                 break
+
             # read data to device
             img1, img2 = data['img1'], data['img2']
             img_pair = torch.cat([img1, img2], 1).to(self.device)
 
+            if 'img1_ph' in data and 'img2_ph' in data:
+                img1_ph, img2_ph = data['img1_ph'], data['img2_ph']
+                img_pair_ph = torch.cat([img1_ph, img2_ph], 1).to(self.device)
+            else:
+                img_pair_ph = img_pair
+
             # measure data loading time
             am_data_time.update(time.time() - end)
 
-            # compute output
-            res_dict = self.model(img_pair, with_bk=True)
+            # compute prediction, use photometric augmented images
+            res_dict = self.model(img_pair_ph, with_bk=True)
             flows_12, flows_21 = res_dict['flows_fw'], res_dict['flows_bw']
             flows = [torch.cat([flo12, flo21], 1) for flo12, flo21 in
                      zip(flows_12, flows_21)]
+
+            # Compute loss, use original images
             loss, l_ph, l_sm, flow_mean, mask = self.loss_func(flows, img_pair)
 
             # make sure loss does not contain NaNs

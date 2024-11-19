@@ -1,5 +1,5 @@
-from . import sintel_trainer, sintel_trainer_ar
-from . import kitti_trainer, kitti_trainer_ar
+from . import sintel_trainer
+from . import kitti_trainer
 from . import chairs_trainer
 from . import chairs_elbo_trainer
 from . import sintel_elbo_trainer
@@ -8,12 +8,8 @@ from . import chairs_mse_trainer
 def get_trainer(name):
     if name == 'Sintel':
         TrainFramework = sintel_trainer.TrainFramework
-    elif name == 'Sintel_AR':
-        TrainFramework = sintel_trainer_ar.TrainFramework
     elif name == 'KITTI':
         TrainFramework = kitti_trainer.TrainFramework
-    elif name == 'KITTI_AR':
-        TrainFramework = kitti_trainer_ar.TrainFramework
     elif name == 'Chairs':
         TrainFramework = chairs_trainer.TrainFramework
     elif name == 'ChairsElbo':

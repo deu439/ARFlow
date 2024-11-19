@@ -1,22 +1,38 @@
-import imageio
-import numpy as np
-import random
+import torch
 from path import Path
 from abc import abstractmethod, ABCMeta
+
+import numpy as np
+from PIL import Image
+from torchvision import transforms
+
 from torch.utils.data import Dataset
 from utils.flow_utils import load_flow
-import re
+
+
+def image_to_tensor(img):
+    """
+    Converts a PIL Image (H x W x C) to a [0,1] normalized torch.FloatTensor of shape (C x H x W).
+    """
+
+    img = transforms.functional.pil_to_tensor(img)
+    return img.float() / 255.0
+
+
+def flow_to_tensor(flow):
+    """
+    Converts numpy flow array (H, W, C) to torch.FloatTensor of shape (C x H x W)
+    """
+    flow = torch.from_numpy(flow)
+    return flow.permute((2, 0, 1)).float()
 
 
 class ImgSeqDataset(Dataset, metaclass=ABCMeta):
-    def __init__(self, root, n_frames, input_transform=None, co_transform=None,
-                 target_transform=None, ap_transform=None):
+    def __init__(self, root, n_frames, geometric_transform=None, photometric_transform=None):
         self.root = Path(root)
         self.n_frames = n_frames
-        self.input_transform = input_transform
-        self.co_transform = co_transform
-        self.ap_transform = ap_transform
-        self.target_transform = target_transform
+        self.geometric_transform = geometric_transform
+        self.photometric_transform = photometric_transform
         self.samples = self.collect_samples()
 
     @abstractmethod
@@ -25,19 +41,19 @@ class ImgSeqDataset(Dataset, metaclass=ABCMeta):
 
     def _load_sample(self, s):
         images = s['imgs']
-        images = [imageio.imread(self.root / p).astype(np.float32) for p in images]
+        images = torch.stack([image_to_tensor(Image.open(self.root / p)) for p in images])
 
         target = {}
         if 'flow' in s:
-            target['flow'] = load_flow(self.root / s['flow'])
+            target['flow'] = flow_to_tensor(load_flow(self.root / s['flow']))
         if 'mask' in s:
             # 0~255 HxWx1
-            mask = imageio.imread(self.root / s['mask']).astype(np.float32) / 255.
+            mask = image_to_tensor(Image.open(self.root / s['mask']))
             if len(mask.shape) == 3:
                 mask = mask[:, :, 0]
             target['mask'] = np.expand_dims(mask, -1)
         if 'flow_bw' in s:
-            target['flow_bw'] = load_flow(self.root / s['flow_bw'])
+            target['flow_bw'] = flow_to_tensor(load_flow(self.root / s['flow_bw']))
         return images, target
 
     def __len__(self):
@@ -46,30 +62,24 @@ class ImgSeqDataset(Dataset, metaclass=ABCMeta):
     def __getitem__(self, idx):
         images, target = self._load_sample(self.samples[idx])
 
-        if self.co_transform is not None:
-            # In unsupervised learning, there is no need to change target with image
-            images, _ = self.co_transform(images, {})
-        if self.input_transform is not None:
-            images = [self.input_transform(i) for i in images]
-        data = {'img{}'.format(i + 1): p for i, p in enumerate(images)}
+        if self.geometric_transform is not None:
+            images = self.geometric_transform(images)
 
-        if self.ap_transform is not None:
-            imgs_ph = self.ap_transform(
-                [data['img{}'.format(i + 1)].clone() for i in range(self.n_frames)])
-            for i in range(self.n_frames):
-                data['img{}_ph'.format(i + 1)] = imgs_ph[i]
+        data = {'img{}'.format(i + 1): img for i, img in enumerate(images)}
 
-        if self.target_transform is not None:
-            for key in self.target_transform.keys():
-                target[key] = self.target_transform[key](target[key])
+        if self.photometric_transform is not None:
+            images_ph = self.photometric_transform(images)
+            data.update({'img{}_ph'.format(i + 1): img_ph for i, img_ph in enumerate(images_ph)})
+
         data['target'] = target
+
         return data
 
 
 class SintelRaw(ImgSeqDataset):
-    def __init__(self, root, n_frames=2, transform=None, co_transform=None):
-        super(SintelRaw, self).__init__(root, n_frames, input_transform=transform,
-                                        co_transform=co_transform)
+    def __init__(self, root, n_frames=2, geometric_transform=None, photometric_transform=None):
+        super(SintelRaw, self).__init__(root, n_frames, geometric_transform=geometric_transform,
+                                        photometric_transform=photometric_transform)
 
     def collect_samples(self):
         scene_list = self.root.dirs()
@@ -87,8 +97,7 @@ class SintelRaw(ImgSeqDataset):
 
 class Sintel(ImgSeqDataset):
     def __init__(self, root, n_frames=2, type='clean',
-                 subsplit='trainval', with_flow=True, ap_transform=None,
-                 transform=None, target_transform=None, co_transform=None, ):
+                 subsplit='trainval', with_flow=True, geometric_transform=None, photometric_transform=None):
         self.dataset_type = type
         self.with_flow = with_flow
 
@@ -97,9 +106,8 @@ class Sintel(ImgSeqDataset):
                                'bandage_2', 'cave_2', 'market_2', 'market_5', 'shaman_2',
                                'sleeping_2', 'temple_3']  # Unofficial train-val split
 
-        super(Sintel, self).__init__(root, n_frames, input_transform=transform,
-                                     target_transform=target_transform,
-                                     co_transform=co_transform, ap_transform=ap_transform)
+        super(Sintel, self).__init__(root, n_frames, geometric_transform=geometric_transform,
+                                     photometric_transform=photometric_transform)
 
     def collect_samples(self):
         img_dir = self.root / Path(self.dataset_type)
@@ -146,15 +154,14 @@ class Sintel(ImgSeqDataset):
 
 
 class Chairs2(ImgSeqDataset):
-    def __init__(self, root, n_frames=2, split='training', with_flow=True, ap_transform=None, transform=None,
-                 target_transform=None, co_transform=None):
+    def __init__(self, root, n_frames=2, split='training', with_flow=True, geometric_transform=None,
+                 photometric_transform=None):
         self.with_flow = with_flow
         self.split = split
 
         root = Path(root)
-        super(Chairs2, self).__init__(root, n_frames, input_transform=transform,
-                                      target_transform=target_transform,
-                                      co_transform=co_transform, ap_transform=ap_transform)
+        super(Chairs2, self).__init__(root, n_frames, geometric_transform=geometric_transform,
+                                      photometric_transform=photometric_transform)
 
     def collect_samples(self):
 
@@ -190,8 +197,8 @@ class Chairs2(ImgSeqDataset):
 
 
 class Chairs(ImgSeqDataset):
-    def __init__(self, root, n_frames=2, split='training', with_flow=True, ap_transform=None, transform=None,
-                 target_transform=None, co_transform=None):
+    def __init__(self, root, n_frames=2, split='training', with_flow=True, geometric_transform=None,
+                 photometric_transform=None):
         self.with_flow = with_flow
         self.split = split
         self.valid_indices = [
@@ -234,9 +241,8 @@ class Chairs(ImgSeqDataset):
         ]
 
         root = Path(root)
-        super(Chairs, self).__init__(root, n_frames, input_transform=transform,
-                                      target_transform=target_transform,
-                                      co_transform=co_transform, ap_transform=ap_transform)
+        super(Chairs, self).__init__(root, n_frames, geometric_transform=geometric_transform,
+                                     photometric_transform=photometric_transform)
 
     def collect_samples(self):
 
@@ -276,14 +282,10 @@ class Chairs(ImgSeqDataset):
 
 
 class KITTIRawFile(ImgSeqDataset):
-    def __init__(self, root, sp_file, n_frames=2, ap_transform=None,
-                 transform=None, target_transform=None, co_transform=None):
+    def __init__(self, root, sp_file, n_frames=2, geometric_transform=None, photometric_transform=None):
         self.sp_file = sp_file
-        super(KITTIRawFile, self).__init__(root, n_frames,
-                                           input_transform=transform,
-                                           target_transform=target_transform,
-                                           co_transform=co_transform,
-                                           ap_transform=ap_transform)
+        super(KITTIRawFile, self).__init__(root, n_frames, geometric_transform=geometric_transform,
+                                           photometric_transform=photometric_transform)
 
     def collect_samples(self):
         samples = []
@@ -300,12 +302,9 @@ class KITTIFlowMV(ImgSeqDataset):
     This dataset is used for unsupervised training only
     """
 
-    def __init__(self, root, n_frames=2,
-                 transform=None, co_transform=None, ap_transform=None, ):
-        super(KITTIFlowMV, self).__init__(root, n_frames,
-                                          input_transform=transform,
-                                          co_transform=co_transform,
-                                          ap_transform=ap_transform)
+    def __init__(self, root, n_frames=2, geometric_transform=None, photometric_transform=None):
+        super(KITTIFlowMV, self).__init__(root, n_frames, geometric_transform=geometric_transform,
+                                          photometric_transform=photometric_transform)
 
     def collect_samples(self):
         flow_occ_dir = 'flow_' + 'occ'
@@ -343,8 +342,9 @@ class KITTIFlow(ImgSeqDataset):
     file filepath and there is no transform about target.
     """
 
-    def __init__(self, root, n_frames=2, transform=None):
-        super(KITTIFlow, self).__init__(root, n_frames, input_transform=transform)
+    def __init__(self, root, n_frames=2, geometric_transform=None, photometric_transform=None):
+        super(KITTIFlow, self).__init__(root, n_frames, geometric_transform=geometric_transform,
+                                        photometric_transform=photometric_transform)
 
     def __getitem__(self, idx):
         s = self.samples[idx]
@@ -354,7 +354,7 @@ class KITTIFlow(ImgSeqDataset):
         ed = st + self.n_frames
         imgs = [s['img{}'.format(i)] for i in range(st, ed)]
 
-        inputs = [imageio.imread(self.root / p).astype(np.float32) for p in imgs]
+        inputs = [image_to_tensor(Image.open(self.root / p)) for p in imgs]
         raw_size = inputs[0].shape[:2]
 
         data = {
@@ -405,11 +405,30 @@ class KITTIFlow(ImgSeqDataset):
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
-    dataset = Chairs(root="/home/deu/FlyingChairs_release/data")
-    sample = dataset.__getitem__(0)
-    img1 = sample['img1'] / 255.0
-    img2 = sample['img2'] / 255.0
-    fig, ax = plt.subplots(2)
-    ax[0].imshow(img1)
-    ax[1].imshow(img2)
+    from easydict import EasyDict
+    from transforms.geometric_transforms import get_geometric_transforms
+    from transforms.photometric_transforms import get_photometric_transforms
+
+    geometric_transform = get_geometric_transforms(cfg=EasyDict({
+        #'crop': True,
+        #'crop_size': [100, 100],
+        #'hflip': True,
+    }))
+    photometric_transforms = get_photometric_transforms(cfg=EasyDict({
+        #'hue': 0.5,
+        #'gamma': 0.5
+        'swap_channels': True
+    }))
+    dataset = Chairs(root="/home/deu/Datasets/FlyingChairs_release/data", with_flow=True,
+                     geometric_transform=geometric_transform, photometric_transform=photometric_transforms)
+    sample = dataset.__getitem__(100)
+    img1 = sample['img1'].numpy().transpose(1, 2, 0)
+    img2 = sample['img2'].numpy().transpose(1, 2, 0)
+    img1_ph = sample['img1_ph'].numpy().transpose(1, 2, 0)
+    img2_ph = sample['img2_ph'].numpy().transpose(1, 2, 0)
+    fig, ax = plt.subplots(2,2)
+    ax[0,0].imshow(img1)
+    ax[0,1].imshow(img2)
+    ax[1,0].imshow(img1_ph)
+    ax[1,1].imshow(img2_ph)
     plt.show()
