@@ -86,19 +86,17 @@ class SintelRaw(ImgSeqDataset):
 
 
 class Sintel(ImgSeqDataset):
-    def __init__(self, root, n_frames=2, type='clean', split='training',
+    def __init__(self, root, n_frames=2, type='clean',
                  subsplit='trainval', with_flow=True, ap_transform=None,
                  transform=None, target_transform=None, co_transform=None, ):
         self.dataset_type = type
         self.with_flow = with_flow
 
-        self.split = split
         self.subsplit = subsplit
         self.training_scene = ['alley_1', 'ambush_4', 'ambush_6', 'ambush_7', 'bamboo_2',
                                'bandage_2', 'cave_2', 'market_2', 'market_5', 'shaman_2',
                                'sleeping_2', 'temple_3']  # Unofficial train-val split
 
-        root = Path(root) / split
         super(Sintel, self).__init__(root, n_frames, input_transform=transform,
                                      target_transform=target_transform,
                                      co_transform=co_transform, ap_transform=ap_transform)
@@ -115,7 +113,7 @@ class Sintel(ImgSeqDataset):
             info = flow_map.splitall()
             scene, filename = info[-2:]
             fid = int(filename[-8:-4])
-            if self.split == 'training' and self.subsplit != 'trainval':
+            if self.subsplit != 'trainval':
                 if self.subsplit == 'train' and scene not in self.training_scene:
                     continue
                 if self.subsplit == 'val' and scene in self.training_scene:
@@ -147,16 +145,16 @@ class Sintel(ImgSeqDataset):
         return samples
 
 
-class Chairs(ImgSeqDataset):
+class Chairs2(ImgSeqDataset):
     def __init__(self, root, n_frames=2, split='training', with_flow=True, ap_transform=None, transform=None,
                  target_transform=None, co_transform=None):
         self.with_flow = with_flow
         self.split = split
 
         root = Path(root)
-        super(Chairs, self).__init__(root, n_frames, input_transform=transform,
-                                     target_transform=target_transform,
-                                     co_transform=co_transform, ap_transform=ap_transform)
+        super(Chairs2, self).__init__(root, n_frames, input_transform=transform,
+                                      target_transform=target_transform,
+                                      co_transform=co_transform, ap_transform=ap_transform)
 
     def collect_samples(self):
 
@@ -186,6 +184,92 @@ class Chairs(ImgSeqDataset):
                 s['flow_bw'] = path / '{:07d}-flow_10.flo'.format(fid)
                 assert s['flow_bw'].isfile()
 
+            samples.append(s)
+
+        return samples
+
+
+class Chairs(ImgSeqDataset):
+    def __init__(self, root, n_frames=2, split='training', with_flow=True, ap_transform=None, transform=None,
+                 target_transform=None, co_transform=None):
+        self.with_flow = with_flow
+        self.split = split
+        self.valid_indices = [
+            6, 18, 43, 46, 59, 63, 97, 112, 118, 121, 122, 132, 133, 153, 161, 249, 264, 265, 292, 294, 296, 300, 317,
+            321, 337, 338, 344, 359, 400, 402, 430, 439, 469, 477, 495, 510, 529, 532, 573, 582, 584, 589, 594, 682,
+            689, 697, 715, 768, 787, 811, 826, 837, 842, 884, 918, 938, 943, 971, 975, 981, 1017, 1044, 1065, 1119,
+            1122, 1134, 1154, 1156, 1159, 1160, 1174, 1188, 1220, 1238, 1239, 1260, 1267, 1279, 1297, 1355, 1379, 1388,
+            1495, 1509, 1519, 1575, 1602, 1615, 1669, 1674, 1700, 1713, 1715, 1738, 1842, 1873, 1880, 1902, 1922, 1935,
+            1962, 1968, 1979, 2019, 2031, 2040, 2044, 2062, 2114, 2205, 2217, 2237, 2251, 2275, 2293, 2311, 2343, 2360,
+            2375, 2383, 2400, 2416, 2420, 2484, 2503, 2505, 2577, 2590, 2591, 2623, 2625, 2637, 2652, 2656, 2659, 2660,
+            2665, 2673, 2707, 2708, 2710, 2726, 2733, 2762, 2828, 2865, 2867, 2906, 2923, 2930, 2967, 2973, 2994, 3011,
+            3026, 3032, 3041, 3042, 3071, 3114, 3125, 3130, 3138, 3142, 3158, 3184, 3207, 3220, 3248, 3254, 3273, 3277,
+            3322, 3329, 3334, 3339, 3342, 3347, 3352, 3397, 3420, 3431, 3434, 3449, 3456, 3464, 3504, 3527, 3530, 3538,
+            3556, 3578, 3585, 3592, 3595, 3598, 3604, 3614, 3616, 3671, 3677, 3679, 3698, 3724, 3729, 3735, 3746, 3751,
+            3753, 3780, 3783, 3814, 3818, 3820, 3855, 3886, 3945, 3948, 3971, 3986, 4012, 4023, 4072, 4076, 4133, 4159,
+            4168, 4191, 4195, 4208, 4247, 4250, 4299, 4308, 4318, 4319, 4320, 4321, 4383, 4400, 4402, 4408, 4417, 4424,
+            4485, 4492, 4494, 4518, 4526, 4539, 4579, 4607, 4610, 4621, 4624, 4638, 4647, 4663, 4669, 4717, 4740, 4748,
+            4771, 4775, 4777, 4786, 4801, 4846, 4864, 4892, 4905, 4923, 4926, 4957, 4964, 4965, 4995, 5012, 5020, 5037,
+            5039, 5042, 5056, 5119, 5123, 5131, 5163, 5165, 5179, 5197, 5228, 5267, 5271, 5274, 5280, 5300, 5311, 5315,
+            5364, 5376, 5385, 5394, 5415, 5418, 5434, 5449, 5495, 5506, 5510, 5526, 5567, 5582, 5603, 5610, 5621, 5654,
+            5671, 5679, 5691, 5701, 5704, 5725, 5753, 5766, 5804, 5812, 5861, 5882, 5896, 5913, 5916, 5941, 5953, 5967,
+            5978, 5989, 6008, 6038, 6062, 6070, 6081, 6112, 6128, 6147, 6162, 6167, 6169, 6179, 6183, 6191, 6221, 6236,
+            6254, 6271, 6344, 6373, 6380, 6411, 6412, 6443, 6454, 6482, 6499, 6501, 6510, 6533, 6542, 6544, 6561, 6577,
+            6581, 6595, 6596, 6610, 6626, 6630, 6645, 6659, 6674, 6681, 6699, 6700, 6703, 6706, 6742, 6760, 6786, 6793,
+            6795, 6810, 6811, 6831, 6839, 6870, 6872, 6890, 6926, 6996, 7004, 7027, 7030, 7081, 7083, 7098, 7103, 7117,
+            7166, 7201, 7233, 7272, 7283, 7325, 7334, 7336, 7373, 7388, 7408, 7473, 7475, 7483, 7490, 7500, 7517, 7534,
+            7537, 7567, 7621, 7655, 7692, 7705, 7723, 7747, 7751, 7774, 7807, 7822, 7828, 7852, 7874, 7881, 7885, 7905,
+            7913, 7949, 7965, 7966, 7985, 7990, 7993, 8036, 8051, 8075, 8092, 8095, 8114, 8117, 8152, 8160, 8172, 8180,
+            8195, 8196, 8240, 8264, 8291, 8296, 8313, 8368, 8375, 8388, 8408, 8438, 8440, 8519, 8557, 8589, 8598, 8602,
+            8652, 8658, 8724, 8760, 8764, 8786, 8803, 8814, 8827, 8855, 8857, 8867, 8919, 8923, 8924, 8933, 8959, 8968,
+            9004, 9019, 9079, 9096, 9105, 9113, 9130, 9148, 9171, 9172, 9198, 9201, 9250, 9254, 9271, 9283, 9289, 9296,
+            9322, 9324, 9325, 9348, 9400, 9404, 9418, 9427, 9428, 9440, 9469, 9487, 9497, 9512, 9517, 9519, 9530, 9558,
+            9564, 9565, 9585, 9587, 9592, 9600, 9601, 9602, 9633, 9655, 9668, 9679, 9697, 9717, 9724, 9741, 9821, 9825,
+            9826, 9829, 9864, 9867, 9869, 9890, 9930, 9939, 9954, 9968, 10020, 10021, 10026, 10060, 10112, 10119, 10126,
+            10175, 10195, 10202, 10203, 10221, 10222, 10227, 10243, 10251, 10277, 10296, 10303, 10306, 10328, 10352,
+            10361, 10370, 10394, 10408, 10439, 10456, 10464, 10466, 10471, 10479, 10504, 10509, 10510, 10810, 11081,
+            11332, 11608, 11611, 11865, 12391, 12394, 12397, 12400, 12672, 12922, 12931, 13179, 13454, 13718, 14500,
+            14518, 14776, 15298, 15557, 15835, 15840, 16127, 16128, 16387, 16634, 16645, 16652, 17167, 17170, 17959,
+            17960, 17963, 18225, 21177, 21181, 21191, 21803, 21804, 21807, 22585, 22858, 22859, 22867
+        ]
+
+        root = Path(root)
+        super(Chairs, self).__init__(root, n_frames, input_transform=transform,
+                                      target_transform=target_transform,
+                                      co_transform=co_transform, ap_transform=ap_transform)
+
+    def collect_samples(self):
+
+        samples = []
+        for flow_map in sorted((self.root).glob('*.flo')):
+            info = flow_map.splitall()
+            filename = info[-1]
+            fid = int(filename[0:5])
+
+            # Include only train / valid indices (depending on the chosen split)
+            if self.split == 'training':
+                if fid in self.valid_indices:
+                    continue
+            else:
+                if fid not in self.valid_indices:
+                    continue
+
+            s = {'imgs': [self.root / '{:05d}_img{:d}.ppm'.format(fid, i+1) for i in range(self.n_frames)]}
+            try:
+                assert all([p.isfile() for p in s['imgs']])
+
+                if self.with_flow:
+                    if self.n_frames == 2:
+                        # for img1 img2, flow_12 will be evaluated
+                        s['flow'] = flow_map
+                        assert s['flow'].isfile()
+                    else:
+                        raise NotImplementedError(
+                            'n_frames {} with flow or mask'.format(self.n_frames))
+
+            except AssertionError:
+                print('Incomplete sample for: {}'.format(s['imgs'][0]))
+                continue
             samples.append(s)
 
         return samples
