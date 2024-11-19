@@ -1,6 +1,5 @@
  {"data": [{
           "root_chairs": "/home/deu/Datasets/FlyingChairs2/",
-          "run_at": false,
           "test_shape": [384, 512],
           "train_n_frames": 2,
           "type": "Chairs",
@@ -23,7 +22,6 @@
           "w_oof": 0.0,
           "w_occ": 0.0,
           "with_bk": true,
-          "align_corners": false,
           "approx": "diag",
           "n_components": 1,
           "diag_dominant": false,
@@ -37,7 +35,6 @@
  "model": {"type": "uflow_prob",
            "feature_norm": true,
            "level_dropout": 0.1,
-           "align_corners": false,
            "out_channels": [2, 2, 0],
            "inv_cov": false,
            "n_pyramids": 1,

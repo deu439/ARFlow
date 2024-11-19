@@ -1,14 +1,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from utils.uflow_resampler import resampler
 
 
 def flow_to_warp(flow):
     """Compute the warp from the flow field.
 
     Args:
-      [B, 2, H, W] flow: tf.tensor representing optical flow.
+      [B, 2, H, W] flow: tensor representing optical flow. Horizontal (u) component has index 0,
+                         vertical (v) component has index 1.
 
     Returns:
       [B, 2, H, W] The warp, i.e. the endpoints of the estimated flow.
@@ -16,10 +16,10 @@ def flow_to_warp(flow):
 
     # Construct a grid of the image coordinates.
     B, _, height, width = flow.shape
-    j_grid, i_grid = torch.meshgrid(
+    i_grid, j_grid = torch.meshgrid(
         torch.linspace(0.0, height - 1.0, int(height)),
-        torch.linspace(0.0, width - 1.0, int(width)))
-    grid = torch.stack([i_grid, j_grid]).to(flow.device)
+        torch.linspace(0.0, width - 1.0, int(width)), indexing='ij')
+    grid = torch.stack([j_grid, i_grid]).to(flow.device)
 
     # add batch dimension to match the shape of flow.
     grid = grid[None]
@@ -50,19 +50,21 @@ def mask_invalid(coords):
     return (mask_x & mask_y).unsqueeze(1).float()
 
 
-def resample2(source, coords):
+def resample(source, coords):
     """Resample the source image at the passed coordinates.
 
     Args:
-      source: tf.tensor, batch of images to be resampled.
-      coords: [B, 2, H, W] tf.tensor, batch of coordinates in the image.
+      source: [B, C, H, W] tensor, batch of images to be resampled.
+      coords: [B, 2, H, W] tensor, batch of coordinates in the image. Horizontal (u) component has index 0,
+              vertical (v) component has index 1.
 
     Returns:
       The resampled image.
 
     Coordinates should be between 0 and size-1. Coordinates outside of this range
     are handled by interpolating with a background image filled with zeros in the
-    same way that SAME size convolution works.
+    same way that SAME size convolution works. Align_corners=True replicates the
+    behaviour of resampler in the original uflow code.
     """
 
     _, _, H, W = source.shape
@@ -75,37 +77,6 @@ def resample2(source, coords):
     return output
 
 
-def resample(source, coords):
-    """Resample the source image at the passed coordinates.
-
-    Args:
-      source: [B, 3, H, W] batch of images to be resampled.
-      coords: [B, 2, H, W] the warp, i.e. the endpoints of the estimated flow.
-
-    Returns:
-      The resampled images.
-
-    Coordinates should be between 0 and size-1. Coordinates outside of this range
-    are handled by interpolating with a background image filled with zeros in the
-    same way that SAME size convolution works.
-    """
-
-    # Wrap this function because it uses a different order axes
-    #orig_source_dtype = source.dtype
-    #if source.dtype != tf.float32:
-    #    source = tf.cast(source, tf.float32)
-    #if coords.dtype != tf.float32:
-    #    coords = tf.cast(coords, tf.float32)
-    coords_rank = len(coords.shape)
-    if coords_rank == 4:
-        source_perm = source.permute(0,2,3,1)
-        coords_perm = coords.permute(0,2,3,1)
-        output = resampler(source_perm, coords_perm)
-        return output.permute(0,3,1,2)
-    else:
-        raise NotImplementedError()
-
-
 def compute_range_map(flow):
     """Count how often each coordinate is sampled.
 
@@ -113,8 +84,7 @@ def compute_range_map(flow):
     using weights from bilinear interpolation.
 
     Args:
-      flow: A float tensor of shape (batch size x height x width x 2) that
-        represents a dense flow field.
+      [B, 2, H, W] flow: tensor representing optical flow.
 
     Returns:
       A float tensor of shape [batch_size, height, width, 1] that denotes how
@@ -131,7 +101,7 @@ def compute_range_map(flow):
     # Move the coordinate frame appropriately
     output_height = input_height
     output_width = input_width
-    coords = flow_to_warp(flow).permute(0,2,3,1).flip(-1)   # (B, C, U, V) -> (B, U, V, C)
+    coords = flow_to_warp(flow).permute(0,2,3,1).flip(-1)   # (B, C, H, W) -> (B, H, W, C)
 
     # Split coordinates into an integer part and a float offset for interpolation.
     coords_floor = torch.floor(coords)
@@ -165,8 +135,8 @@ def compute_range_map(flow):
             mask = (idxs_i >= 0) & (idxs_i < output_height) & (idxs_j >= 0) & (idxs_j < output_width)
             mask = torch.stack(torch.where(mask)).T
             mask = torch.reshape(mask, [-1])
-            valid_idxs = idxs[mask]     # FIXME
-            valid_offsets = coords_offset_flattened[mask]   # FIXME
+            valid_idxs = idxs[mask]
+            valid_offsets = coords_offset_flattened[mask]
 
             # Compute weights according to bilinear interpolation.
             weights_i = (1. - di) - (-1)**di * valid_offsets[:, 0]
@@ -184,13 +154,13 @@ def compute_range_map(flow):
     # Sum up weights for each pixel and reshape the result.
     num_segments = batch_size * output_height * output_width
     counts = torch.zeros(num_segments, dtype=weights.dtype, device=weights.device)
-    counts.scatter_add_(0, idxs, weights)   # FIXME
+    counts.scatter_add_(0, idxs, weights)
     count_image = torch.reshape(counts, [batch_size, 1, output_height, output_width])
 
     return count_image
 
 
-def upsample(img, is_flow, scale_factor=2.0, align_corners=False):
+def upsample(img, is_flow, scale_factor=2.0):
     """Double resolution of an image or flow field.
 
     Args:
@@ -199,10 +169,11 @@ def upsample(img, is_flow, scale_factor=2.0, align_corners=False):
 
     Returns:
       Resized and potentially scaled image or flow field.
+
+    Align_corners=False replicates the behaviour of the original uflow code.
     """
 
-    img_resized = nn.functional.interpolate(img, scale_factor=scale_factor, mode='bilinear',
-                                            align_corners=align_corners)
+    img_resized = nn.functional.interpolate(img, scale_factor=scale_factor, mode='bilinear', align_corners=False)
 
     if is_flow:
         # Scale flow values to be consistent with the new image size.
@@ -211,7 +182,7 @@ def upsample(img, is_flow, scale_factor=2.0, align_corners=False):
     return img_resized
 
 
-def downsample(img, is_flow, scale_factor=2.0, align_corners=False):
+def downsample(img, is_flow, scale_factor=2.0):
     """Double resolution of an image or flow field.
 
     Args:
@@ -220,10 +191,11 @@ def downsample(img, is_flow, scale_factor=2.0, align_corners=False):
 
     Returns:
       Resized and potentially scaled image or flow field.
+
+    Align_corners=False replicates the behaviour of the original uflow code.
     """
 
-    img_resized = nn.functional.interpolate(img, scale_factor=1/scale_factor, mode='bilinear',
-                                            align_corners=align_corners)
+    img_resized = nn.functional.interpolate(img, scale_factor=1/scale_factor, mode='bilinear', align_corners=False)
 
     if is_flow:
         # Scale flow values to be consistent with the new image size.
@@ -237,6 +209,9 @@ def image_grads(image_batch, stride=1):
     image_batch_y = image_batch[:, :, stride:] - image_batch[:, :, :-stride]
     return image_batch_x, image_batch_y
 
+
+def abs_robust_loss(diff, eps=0.01, q=0.4):
+    return torch.pow((torch.abs(diff) + eps), q)
 
 
 def compute_loss(i1, warped2, flow, use_mag_loss=False):

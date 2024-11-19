@@ -141,8 +141,7 @@ def evaluate_flow(gt_flows, pred_flows, moving_masks=None):
         flo_pred = cv2.resize(pred_flow, (W, H), interpolation=cv2.INTER_LINEAR)
 
         epe_map = np.sqrt(
-            np.sum(np.square(flo_pred[:, :, :2] - gt_flow[:, :, :2]),
-                   axis=2))
+            np.sum(np.square(flo_pred[:, :, :2] - gt_flow[:, :, :2]), axis=2))
         if gt_flow.shape[-1] == 2:
             error += np.mean(epe_map)
 

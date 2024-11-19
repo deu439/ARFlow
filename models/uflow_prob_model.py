@@ -281,7 +281,7 @@ class PWCProbFlow(nn.Module):
                     warped2 = features2
                 else:
                     warp_up = uflow_utils.flow_to_warp(out_up[:, k*2:(k+1)*2])
-                    warped2 = uflow_utils.resample2(features2, warp_up)
+                    warped2 = uflow_utils.resample(features2, warp_up)
 
                 # Compute cost volume by comparing features1 and warped features2.
                 features1_normalized, warped2_normalized = normalize_features(

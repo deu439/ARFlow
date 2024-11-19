@@ -107,7 +107,6 @@ class PWCFlow(nn.Module):
         self._use_feature_warp = True
         self._accumulate_flow = True
         self._shared_flow_decoder = False
-        self._align_corners = cfg.align_corners
 
         self._refine_model = self._build_refinement_model()
         self._flow_layers = self._build_flow_layers()
@@ -162,7 +161,7 @@ class PWCFlow(nn.Module):
                 warped2 = features2
             else:
                 warp_up = uflow_utils.flow_to_warp(flow_up)
-                warped2 = uflow_utils.resample2(features2, warp_up)
+                warped2 = uflow_utils.resample(features2, warp_up)
 
             # Compute cost volume by comparing features1 and warped features2.
             features1_normalized, warped2_normalized = normalize_features(
@@ -218,7 +217,7 @@ class PWCFlow(nn.Module):
                 flow += flow_up
 
             # Upsample flow for the next lower level.
-            flow_up = uflow_utils.upsample(flow, is_flow=True, align_corners=self._align_corners)
+            flow_up = uflow_utils.upsample(flow, is_flow=True)
             if self._num_context_up_channels:
                 context_up = self._context_up_layers[level](context)
 
@@ -240,8 +239,8 @@ class PWCFlow(nn.Module):
         refined_flow = flow + refinement
         flows[0] = refined_flow
 
-        flows.insert(0, uflow_utils.upsample(flows[0], is_flow=True, align_corners=self._align_corners))
-        flows.insert(0, uflow_utils.upsample(flows[0], is_flow=True, align_corners=self._align_corners))
+        flows.insert(0, uflow_utils.upsample(flows[0], is_flow=True))
+        flows.insert(0, uflow_utils.upsample(flows[0], is_flow=True))
 
         return flows
 
@@ -442,6 +441,11 @@ class PWCFeaturePyramid(nn.Module):
 
   def forward(self, x, split_features_by_sample=False):
     x = x * 2. - 1.  # Rescale input from [0,1] to [-1, 1]
+    #import matplotlib
+    #import matplotlib.pyplot as plt
+    #matplotlib.use('TkAgg')
+    #plt.imshow((x[0].cpu().numpy().transpose(1, 2, 0)+1.0) / 2.0)
+    #plt.show()
     features = []
     for level, conv_tuple in enumerate(self._convs):
       for i, conv in enumerate(conv_tuple):

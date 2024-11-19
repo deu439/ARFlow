@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from utils.uflow_utils import flow_to_warp, resample, resample2, mask_invalid, census_loss, image_grads, robust_l1
+from utils.uflow_utils import flow_to_warp, resample, mask_invalid, census_loss, image_grads, robust_l1, upsample, downsample
 from utils.warp_utils import compute_range_map
 
 
@@ -28,22 +28,23 @@ class UFlowLoss(nn.modules.Module):
         # Warp the images #
         ###################
         warp12_0 = flow_to_warp(flow12_0)
-        im1_recons = resample2(im2_0.detach(), warp12_0)
+        im1_recons = resample(im2_0.detach(), warp12_0)
         if self.cfg.with_bk:
             warp21_0 = flow_to_warp(flow21_0)
-            im2_recons = resample2(im1_0.detach(), warp21_0)
+            im2_recons = resample(im1_0.detach(), warp21_0)
 
         # Calculate border and occlusion masks #
         ########################################
         valid_mask1 = mask_invalid(warp12_0)
-        # Calculate occlusion masks at level 2 and then upsample!
+        # Calculate occlusion masks at level 2 and then upsample. Computing occlusion mask at bilinear upsampled
+        # images would produce artifacts!
         occu_mask1 = torch.clamp(compute_range_map(flow21_2), min=0., max=1.)
-        occu_mask1 = F.interpolate(occu_mask1, scale_factor=4, mode='bilinear', align_corners=self.cfg.align_corners)
+        occu_mask1 = upsample(occu_mask1, is_flow=False, scale_factor=4.0)
         mask1 = torch.detach(occu_mask1 * valid_mask1)
         if self.cfg.with_bk:
             valid_mask2 = mask_invalid(warp21_0)
             occu_mask2 = torch.clamp(compute_range_map(flow12_2), min=0., max=1.)
-            occu_mask2 = F.interpolate(occu_mask2, scale_factor=4, mode='bilinear', align_corners=self.cfg.align_corners)
+            occu_mask2 = upsample(occu_mask2, is_flow=False, scale_factor=4.0)
             mask2 = torch.detach(occu_mask2 * valid_mask2)
 
         # Calculate photometric loss on level 0 #
@@ -55,10 +56,8 @@ class UFlowLoss(nn.modules.Module):
         # Calculate smoothness loss on level 2 #
         ############################################################
         _, _, height, width = im1_0.size()
-        im1_1 = F.interpolate(im1_0, scale_factor=0.5, mode='bilinear', align_corners=self.cfg.align_corners)
-        im1_2 = F.interpolate(im1_1, scale_factor=0.5, mode='bilinear', align_corners=self.cfg.align_corners)
-        im2_1 = F.interpolate(im2_0, scale_factor=0.5, mode='bilinear', align_corners=self.cfg.align_corners)
-        im2_2 = F.interpolate(im2_1, scale_factor=0.5, mode='bilinear', align_corners=self.cfg.align_corners)
+        im1_2 = downsample(im1_0, is_flow=False, scale_factor=4.0)
+        im2_2 = downsample(im2_0, is_flow=False, scale_factor=4.0)
 
         # Forward -----------
         im1_gx, im1_gy = image_grads(im1_2.detach())
