@@ -11,14 +11,14 @@ def load_flow(path):
         # see 'https://github.com/ClementPinard/FlowNetPytorch/blob/master/datasets/KITTI.py'
         # The -1 is here to specify not to change the image depth (16bit), and is compatible
         # with both OpenCV2 and OpenCV3
-        flo_file = cv2.imread(path, -1)
-        flo_img = flo_file[:, :, 2:0:-1].astype(np.float32)
-        invalid = (flo_file[:, :, 0] == 0)  # mask
+        flo_file = cv2.imread(path, -1).astype(np.float32)
+        flo_img = flo_file[:, :, 2:0:-1]
+        mask = flo_file[:, :,[0]]  # mask
         flo_img = flo_img - 32768
         flo_img = flo_img / 64
         flo_img[np.abs(flo_img) < 1e-10] = 1e-10
-        flo_img[invalid, :] = 0
-        return flo_img, np.expand_dims(flo_file[:, :, 0], 2)
+        flo_img = flo_img * mask
+        return np.concatenate([flo_img, mask], axis=-1)
     else:
         with open(path, 'rb') as f:
             magic = np.fromfile(f, np.float32, count=1)
@@ -138,7 +138,8 @@ def evaluate_flow(gt_flows, pred_flows, moving_masks=None):
         pred_flow[:, :, 0] = pred_flow[:, :, 0] / w * W
         pred_flow[:, :, 1] = pred_flow[:, :, 1] / h * H
 
-        #flo_pred = cv2.resize(pred_flow, (W, H), interpolation=cv2.INTER_LINEAR)
+        # Back to original size
+        pred_flow = cv2.resize(pred_flow, (W, H), interpolation=cv2.INTER_LINEAR)
 
         epe_map = np.sqrt(
             np.sum(np.square(pred_flow[:, :, :2] - gt_flow[:, :, :2]), axis=2))
@@ -226,43 +227,39 @@ def sp_plot(error, entropy, n=25, alpha=100.0, eps=1e-1):
 
 
 def evaluate_uncertainty(gt_flows, pred_flows, pred_entropies, sp_samples=25):
-    sauc, oauc = 0, 0
-    splots, oplots = [], []
-    B = len(gt_flows)
-    for gt_flow, pred_flow, pred_entropy, i in zip(gt_flows, pred_flows, pred_entropies, range(B)):
+    auc, oracle_auc = 0, 0
+    splots, oracle_splots = [], []
+    batch_size = len(gt_flows)
+    for gt_flow, pred_flow, pred_entropy, i in zip(gt_flows, pred_flows, pred_entropies, range(batch_size)):
         H, W = gt_flow.shape[:2]
 
-        # Resample flow
-        #h, w = pred_flow.shape[:2]
-        #pred_flow = np.copy(pred_flow)
-        #pred_flow[:, :, 0] = pred_flow[:, :, 0] / w * W
-        #pred_flow[:, :, 1] = pred_flow[:, :, 1] / h * H
-        #flo_pred = cv2.resize(pred_flow, (W, H), interpolation=cv2.INTER_LINEAR)
+        # Resample flow - back to original shape
+        h, w = pred_flow.shape[:2]
+        pred_flow = np.copy(pred_flow)
+        pred_flow[:, :, 0] = pred_flow[:, :, 0] / w * W
+        pred_flow[:, :, 1] = pred_flow[:, :, 1] / h * H
+        pred_flow = cv2.resize(pred_flow, (W, H), interpolation=cv2.INTER_LINEAR)
 
-        # Resample entropy
+        # Resample entropy - back to original shape
         pred_entropy = np.copy(pred_entropy)
         pred_entropy[:, :, 0] = pred_entropy[:, :, 0] - 2*math.log(w) + 2*math.log(W)
         pred_entropy[:, :, 1] = pred_entropy[:, :, 1] - 2*math.log(h) + 2*math.log(H)
         pred_entropy = cv2.resize(pred_entropy, (W, H), interpolation=cv2.INTER_LINEAR)
 
         # Calculate sparsification plots
-        epe_map = np.sqrt(np.sum(np.square(flo_pred[:, :, :2] - gt_flow[:, :, :2]), axis=2))
+        epe_map = np.sqrt(np.sum(np.square(pred_flow[:, :, :2] - gt_flow[:, :, :2]), axis=2))
         entropy_map = np.sum(pred_entropy[:, :, :2], axis=2)
         splot = sp_plot(epe_map, entropy_map)
-        oplot = sp_plot(epe_map, epe_map)     # Oracle
+        oracle_splot = sp_plot(epe_map, epe_map)     # Oracle
 
-        # Collect the splots and oplots
+        # Collect the sparsification plots and oracle sparsification plots
         splots += [splot]
-        oplots += [oplot]
-
-        #import matplotlib.pyplot as plt
-        #plt.plot(sfrac, splot, '+-')
-        #plt.show()
+        oracle_splots += [oracle_splot]
 
         # Cummulate AUC
         frac = np.linspace(0, 1, sp_samples)
-        sauc += np.trapz(splot / splot[0], x=frac)
-        oauc += np.trapz(oplot / oplot[0], x=frac)
+        auc += np.trapz(splot / splot[0], x=frac)
+        oracle_auc += np.trapz(oracle_splot / oracle_splot[0], x=frac)
 
-    return [sauc / B, (sauc - oauc) / B], splots, oplots
+    return [auc / batch_size, (auc - oracle_auc) / batch_size], splots, oracle_splots
 

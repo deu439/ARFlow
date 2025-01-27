@@ -4,7 +4,7 @@ from .base_trainer import BaseTrainer
 from utils.flow_utils import evaluate_flow, torch_flow2rgb, evaluate_uncertainty
 from utils.misc_utils import AverageMeter, matplot_fig_to_numpy, mixture_entropy
 import utils.uflow_utils as uflow_utils
-from triag_solve_cuda import inverse_diagonal
+#from triag_solve_cuda import inverse_diagonal
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -136,8 +136,11 @@ class TrainFramework(BaseTrainer):
         n_step = 0
         for i_set, loader in enumerate(self.valid_loader):
             error_names = ['Loss', 'l_ph', 'l_sm', 'entropy', 'l_oof', 'EPE']
-            if self.cfg.track_auc:
+            if hasattr(self.cfg, 'track_auc') and self.cfg.track_auc:
                 error_names += ['AUC', 'AUC_diff']
+            if hasattr(self.cfg, 'valid_masks') and self.cfg.valid_masks:
+                error_names += ['E_noc', 'E_occ', 'F1_all']
+
             error_meters = AverageMeter(i=len(error_names))
             splots = []
             oplots = []
@@ -228,7 +231,7 @@ class TrainFramework(BaseTrainer):
 
             # Write predicted and true flow to tboard
             gt_flow = data['target']['flow']
-            image = torch_flow2rgb(gt_flow.cpu())
+            image = torch_flow2rgb(gt_flow[:, :2].cpu())
             self.summary_writer.add_images("Valid/gt_{}".format(i_set), image, self.i_epoch)
 
             n_components = self.loss_func.cfg.n_components

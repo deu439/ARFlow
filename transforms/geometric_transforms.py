@@ -1,6 +1,7 @@
 import numbers
 import random
 import torch
+import torch.nn.functional as F
 
 
 def get_geometric_transforms(cfg):
@@ -9,6 +10,8 @@ def get_geometric_transforms(cfg):
         transforms.append(RandomCrop(cfg.crop_size))
     if hasattr(cfg, 'hflip') and cfg.hflip:
         transforms.append(RandomHorizontalFlip())
+    if hasattr(cfg, 'scale') and cfg.scale:
+        transforms.append(Scale(cfg.scale_size))
     return Compose(transforms)
 
 
@@ -54,3 +57,13 @@ class RandomHorizontalFlip(object):
         if random.random() < 0.5:
             inputs = torch.flip(inputs, dims=[-1])
         return inputs
+
+class Scale(object):
+    """
+    Deterministic scaling
+    """
+    def __init__(self, size):
+        self.size = size
+
+    def __call__(self, inputs):
+        return F.interpolate(inputs, size=self.size, mode='bilinear', align_corners=False)

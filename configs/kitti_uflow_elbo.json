@@ -1,12 +1,13 @@
 {
   "data": [
     {
-      "root_chairs": "/home/deu/Datasets/FlyingChairs_release/data",
+      "root": "/home/deu/Datasets/KITTI_2012/testing",
       "split": "train",
-      "type": "Chairs",
+      "type": "KITTI",
       "n_frames": 2,
       "geometric_aug": {
-        "hflip": true
+        "scale": true,
+        "scale_size": [384, 1248]
       },
       "photometric_aug": {
         "hue": 0.5,
@@ -14,10 +15,32 @@
       }
     },
     {
-      "root_chairs": "/home/deu/Datasets/FlyingChairs_release/data",
-      "split": "valid",
-      "type": "Chairs",
-      "n_frames": 2
+      "root": "/home/deu/Datasets/KITTI_2015/testing",
+      "split": "train",
+      "type": "KITTI",
+      "n_frames": 2,
+      "geometric_aug": {
+        "scale": true,
+        "scale_size": [384, 1248]
+      },
+      "photometric_aug": {
+        "hue": 0.5,
+        "swap_channels": true
+      }
+    },
+    {
+      "root": "/home/deu/Datasets/KITTI_2012/training",
+      "split": "test",
+      "type": "KITTI",
+      "n_frames": 2,
+      "test_shape": [384, 1248]
+    },
+    {
+      "root": "/home/deu/Datasets/KITTI_2015/training",
+      "split": "test",
+      "type": "KITTI",
+      "n_frames": 2,
+      "test_shape": [384, 1248]
     }
   ],
   "loss": {
@@ -70,17 +93,18 @@
     "beta2": 0.999,
     "weight_decay": 0.0,
     "eps": 1e-8,
-    "pretrained_model": null,
+    "pretrained_model": "outputs/checkpoints/241210/180738/Chairs_ckpt.pth.tar",
     "print_freq": 10,
     "record_freq": 10,
     "save_iter": 10000,
     "valid_freq": 10,
     "valid_size": 0,
-    "valid_batch_size": 8,
+    "valid_batch_size": 1,
     "workers": 4,
     "sp_samples": 25,
     "clip": -1.0,
-    "track_auc": false
+    "track_auc": false,
+    "valid_masks": true
   },
   "trainer": "ChairsElbo"
 }

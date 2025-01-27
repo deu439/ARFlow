@@ -23,11 +23,12 @@ def main(cfg, _log):
         train_set, batch_size=cfg.train.batch_size,
         num_workers=cfg.train.workers, pin_memory=True, shuffle=True)
 
-    max_test_batch = 4
+    # Default validation batch size is 1 for compatibility with KITTI dataset
+    valid_batch_size = cfg.train.valid_batch_size if hasattr(cfg.train, 'valid_batch_size') else 1
     valid_loader = [torch.utils.data.DataLoader(
-        s, batch_size=min(max_test_batch, cfg.train.batch_size),
+        s, batch_size=valid_batch_size,
         num_workers=min(4, cfg.train.workers),
-        pin_memory=True, shuffle=False) for s in valid_set]
+        pin_memory=True, shuffle=True) for s in valid_set]
     valid_size = sum([len(l) for l in valid_loader])
 
     if cfg.train.epoch_size == 0:

@@ -161,7 +161,6 @@ class PWCProbFlow(nn.Module):
         self._use_feature_warp = True
         self._accumulate_flow = True
         self._shared_flow_decoder = False
-        self._align_corners = cfg.align_corners
         # out_channels is a list [L, M, N] representing the number of channels in three groups:
         # L - channels are propagated throughout the pyramid and used for warping
         # M - channels are propagated throughout the pyramid, but not used for warping
@@ -226,13 +225,13 @@ class PWCProbFlow(nn.Module):
             flow, log_diag, rest = torch.split(out, self._out_channels, dim=1)
             list_up = []
             if self._out_channels[0] > 0:
-                flow_up = uflow_utils.upsample(flow, is_flow=True, align_corners=self._align_corners)
+                flow_up = uflow_utils.upsample(flow, is_flow=True)
                 list_up.append(flow_up)
             if self._out_channels[1] > 0:
-                log_diag_up = uflow_utils.upsample(log_diag + self._diag_bias, is_flow=False, align_corners=self._align_corners)
+                log_diag_up = uflow_utils.upsample(log_diag + self._diag_bias, is_flow=False)
                 list_up.append(log_diag_up)
             if self._out_channels[2] > 0:
-                rest_up = uflow_utils.upsample(rest, is_flow=False, align_corners=self._align_corners)
+                rest_up = uflow_utils.upsample(rest, is_flow=False)
                 list_up.append(rest_up)
 
             out_up = torch.cat(list_up, dim=1)
@@ -240,10 +239,10 @@ class PWCProbFlow(nn.Module):
             flow, log_diag = torch.split(out, self._out_channels[0:2], dim=1)
             list_up = []
             if self._out_channels[0] > 0:
-                flow_up = uflow_utils.upsample(flow, is_flow=True, align_corners=self._align_corners)
+                flow_up = uflow_utils.upsample(flow, is_flow=True)
                 list_up.append(flow_up)
             if self._out_channels[1] > 0:
-                log_diag_up = uflow_utils.upsample(log_diag + self._diag_bias, is_flow=False, align_corners=self._align_corners)
+                log_diag_up = uflow_utils.upsample(log_diag + self._diag_bias, is_flow=False)
                 list_up.append(log_diag_up)
 
             out_up = torch.cat(list_up, dim=1)
@@ -711,22 +710,18 @@ class MixtureWeightsNet(nn.Module):
 
         # Compute per-pixel losses and weights
         data_pixel_loss12, data_pixel_weight12 = data_loss_no_penalty(
-            im1_0, im2_0, flow12_2, flow21_2, self.cfg.align_corners, "none", ['census']
+            im1_0, im2_0, flow12_2, flow21_2,"none", ['census']
         )
         # data_loss_no_penalty returns a list of tensors corresponding to the data_loss list
         data_pixel_loss12 = data_pixel_loss12[0]
         data_pixel_weight12 = data_pixel_weight12[0]
         smooth_loss12_x, smooth_weight12_x, smooth_loss12_y, smooth_weight12_y = smooth_loss_no_penalty(
-            im1_0, flow12_2, self.cfg.align_corners, 150.0, edge_asymp=0.01
+            im1_0, flow12_2, 150.0, edge_asymp=0.01
         )
 
         # Downscale data loss to level 2 in order to match the size of the smoothness loss
-        data_pixel_loss12 = func.interpolate(
-            data_pixel_loss12, scale_factor=0.25, mode='bilinear', align_corners=self.cfg.align_corners
-        )
-        data_pixel_weight12 = func.interpolate(
-            data_pixel_weight12, scale_factor=0.25, mode='bilinear', align_corners=self.cfg.align_corners
-        )
+        data_pixel_loss12 = uflow_utils.downsample(data_pixel_loss12, is_flow=False, scale_factor=4)
+        data_pixel_weight12 = uflow_utils.downsample(data_pixel_weight12, is_flow=False, scale_factor=4)
 
         # Pad the smooth losses to match the size of the data loss
         smooth_loss12_x = func.pad(smooth_loss12_x, (1, 0))

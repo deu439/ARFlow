@@ -43,7 +43,7 @@ class BaseTrainer:
         for epoch in range(self.cfg.epoch_num):
             self._run_one_epoch()
 
-            if self.i_epoch % self.cfg.val_epoch_size == 0:
+            if self.i_epoch % self.cfg.valid_freq == 0:
                 errors, error_names = self._validate_with_gt()
                 valid_res = ' '.join(
                     '{}: {:.2f}'.format(*t) for t in zip(error_names, errors))

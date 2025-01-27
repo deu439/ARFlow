@@ -22,7 +22,7 @@ if __name__ == '__main__':
 
     if args.evaluate:
         cfg.train.update({
-            'epochs': 1,
+            'epoch_num': 1,
             'epoch_size': -1,
             'valid_size': 0,
             'workers': 1,

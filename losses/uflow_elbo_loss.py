@@ -9,6 +9,7 @@ import math
 from utils.uflow_utils import flow_to_warp, resample, compute_range_map, mask_invalid, census_loss_no_penalty, \
      image_grads, upsample, downsample, ssim_loss
 #from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product_general, matrix_vector_product_T_general, NaturalGradientIdentityT, NaturalGradientIdentityC
+#from utils.triag_solve import matrix_vector_product_general, matrix_vector_product_T_general
 from utils.misc_utils import gaussian_mixture_log_pdf
 from .penalty_functions import get_penalty
 
@@ -404,8 +405,7 @@ class UFlowElboLoss(nn.modules.Module):
 
         loss_warp = 0
         data_pixel_loss12, data_pixel_weight12, occu_mask12, valid_mask12 = data_loss_no_penalty(
-            im1_0, im2_0, flow12_2, flow21_2, self.cfg.align_corners, self.cfg.occ_type, self.cfg.data_loss,
-            mean12_2_rep, mean21_2_rep
+            im1_0, im2_0, flow12_2, flow21_2, self.cfg.occ_type, self.cfg.data_loss, mean12_2_rep, mean21_2_rep
         )
         for pixel_loss, pixel_weight, weight, penalty in zip(data_pixel_loss12, data_pixel_weight12, self.cfg.data_weight, penalty_list):
             loss_warp += torch.sum(pixel_weight * weight * penalty(pixel_loss))
@@ -413,8 +413,7 @@ class UFlowElboLoss(nn.modules.Module):
         if self.cfg.with_bk:
             # Here the arguments are passed in reversed order!
             data_pixel_loss21, data_pixel_weight21, occu_mask21, _ = data_loss_no_penalty(
-                im2_0, im1_0, flow21_2, flow12_2, self.cfg.align_corners, self.cfg.occ_type, self.cfg.data_loss,
-                mean21_2_rep, mean12_2_rep
+                im2_0, im1_0, flow21_2, flow12_2, self.cfg.occ_type, self.cfg.data_loss, mean21_2_rep, mean12_2_rep
             )
             for pixel_loss, pixel_weight, weight, penalty in zip(data_pixel_loss21, data_pixel_weight21, self.cfg.data_weight, penalty_list):
                 loss_warp += torch.sum(pixel_weight * weight * penalty(pixel_loss))
@@ -425,7 +424,7 @@ class UFlowElboLoss(nn.modules.Module):
             if self.cfg.approx == 'diag':
                 # Get the weights
                 _, smooth_weight12_x, _, smooth_weight12_y = smooth_loss_no_penalty(
-                    im1_0, flow12_2, self.cfg.align_corners, self.cfg.edge_constant, self.cfg.edge_asymp
+                    im1_0, flow12_2, self.cfg.edge_constant, self.cfg.edge_asymp
                 )
 
                 # Get the expected values of the squared differences
@@ -448,7 +447,7 @@ class UFlowElboLoss(nn.modules.Module):
                 if self.cfg.with_bk:
                     # Get the weights
                     _, smooth_weight21_x, _, smooth_weight21_y = smooth_loss_no_penalty(
-                        im2_0, flow21_2, self.cfg.align_corners, self.cfg.edge_constant, self.cfg.edge_asymp
+                        im2_0, flow21_2, self.cfg.edge_constant, self.cfg.edge_asymp
                     )
 
                     # Get the expected values of the squared differences
@@ -469,7 +468,7 @@ class UFlowElboLoss(nn.modules.Module):
             penalty_func_smooth = get_penalty(self.cfg.penalty_smooth)
 
             smooth_loss12_x, smooth_weight12_x, smooth_loss12_y, smooth_weight12_y = smooth_loss_no_penalty(
-                im1_0, flow12_2, self.cfg.align_corners, self.cfg.edge_constant, self.cfg.edge_asymp
+                im1_0, flow12_2, self.cfg.edge_constant, self.cfg.edge_asymp
             )
             # In contrast to data loss, the smoothness loss is AVERAGED over pixels (comes from the UFlow code)
             loss_smooth = torch.mean(smooth_weight12_x * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss12_x**2, dim=1))) \
@@ -477,7 +476,7 @@ class UFlowElboLoss(nn.modules.Module):
             if self.cfg.with_bk:
                 # Here the arguments are passed in reversed order!
                 smooth_loss21_x, smooth_weight21_x, smooth_loss21_y, smooth_weight21_y = smooth_loss_no_penalty(
-                    im2_0, flow21_2, self.cfg.align_corners, self.cfg.edge_constant, self.cfg.edge_asymp
+                    im2_0, flow21_2, self.cfg.edge_constant, self.cfg.edge_asymp
                 )
                 loss_smooth += torch.mean(smooth_weight21_x * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss21_x**2, dim=1))) \
                               + torch.mean(smooth_weight21_y * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss21_y**2, dim=1)))

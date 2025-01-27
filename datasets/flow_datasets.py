@@ -46,6 +46,10 @@ class ImgSeqDataset(Dataset, metaclass=ABCMeta):
         target = {}
         if 'flow' in s:
             target['flow'] = flow_to_tensor(load_flow(self.root / s['flow']))
+        if 'flow_occ' and 'flow_noc' in s:
+            flow_occ = flow_to_tensor(load_flow(self.root / s['flow_occ']))
+            flow_noc = flow_to_tensor(load_flow(self.root / s['flow_noc']))
+            target['flow'] = torch.concat([flow_occ, flow_noc[[2]]], dim=0)
         if 'mask' in s:
             # 0~255 HxWx1
             mask = image_to_tensor(Image.open(self.root / s['mask']))
@@ -281,124 +285,47 @@ class Chairs(ImgSeqDataset):
         return samples
 
 
-class KITTIRawFile(ImgSeqDataset):
-    def __init__(self, root, sp_file, n_frames=2, geometric_transform=None, photometric_transform=None):
-        self.sp_file = sp_file
-        super(KITTIRawFile, self).__init__(root, n_frames, geometric_transform=geometric_transform,
-                                           photometric_transform=photometric_transform)
-
-    def collect_samples(self):
-        samples = []
-        with open(self.sp_file, 'r') as f:
-            for line in f.readlines():
-                sp = line.split()
-                s = {'imgs': [sp[i] for i in range(self.n_frames)]}
-                samples.append(s)
-            return samples
-
-
-class KITTIFlowMV(ImgSeqDataset):
-    """
-    This dataset is used for unsupervised training only
-    """
-
-    def __init__(self, root, n_frames=2, geometric_transform=None, photometric_transform=None):
-        super(KITTIFlowMV, self).__init__(root, n_frames, geometric_transform=geometric_transform,
-                                          photometric_transform=photometric_transform)
-
-    def collect_samples(self):
-        flow_occ_dir = 'flow_' + 'occ'
-        assert (self.root / flow_occ_dir).isdir()
-
-        img_l_dir, img_r_dir = 'image_2', 'image_3'
-        assert (self.root / img_l_dir).isdir() and (self.root / img_r_dir).isdir()
-
-        samples = []
-        for flow_map in sorted((self.root / flow_occ_dir).glob('*.png')):
-            flow_map = flow_map.basename()
-            root_filename = flow_map[:-7]
-
-            for img_dir in [img_l_dir, img_r_dir]:
-                img_list = (self.root / img_dir).files('*{}*.png'.format(root_filename))
-                img_list.sort()
-
-                for st in range(0, len(img_list) - self.n_frames + 1):
-                    seq = img_list[st:st + self.n_frames]
-                    sample = {}
-                    sample['imgs'] = []
-                    for i, file in enumerate(seq):
-                        frame_id = int(file[-6:-4])
-                        if 12 >= frame_id >= 9:
-                            break
-                        sample['imgs'].append(self.root.relpathto(file))
-                    if len(sample['imgs']) == self.n_frames:
-                        samples.append(sample)
-        return samples
-
-
 class KITTIFlow(ImgSeqDataset):
     """
     This dataset is used for validation only, so all files about target are stored as
     file filepath and there is no transform about target.
     """
 
-    def __init__(self, root, n_frames=2, geometric_transform=None, photometric_transform=None):
+    def __init__(self, root, n_frames=2, with_flow=True, geometric_transform=None, photometric_transform=None):
+        self.with_flow = with_flow
+
         super(KITTIFlow, self).__init__(root, n_frames, geometric_transform=geometric_transform,
                                         photometric_transform=photometric_transform)
-
-    def __getitem__(self, idx):
-        s = self.samples[idx]
-
-        # img 1 2 for 2 frames, img 0 1 2 for 3 frames.
-        st = 1 if self.n_frames == 2 else 0
-        ed = st + self.n_frames
-        imgs = [s['img{}'.format(i)] for i in range(st, ed)]
-
-        inputs = [image_to_tensor(Image.open(self.root / p)) for p in imgs]
-        raw_size = inputs[0].shape[:2]
-
-        data = {
-            'flow_occ': self.root / s['flow_occ'],
-            'flow_noc': self.root / s['flow_noc'],
-        }
-
-        data.update({  # for test set
-            'im_shape': raw_size,
-            'img1_path': self.root / s['img1'],
-        })
-
-        if self.input_transform is not None:
-            inputs = [self.input_transform(i) for i in inputs]
-        data.update({'img{}'.format(i + 1): inputs[i] for i in range(self.n_frames)})
-        return data
 
     def collect_samples(self):
         '''Will search in training folder for folders 'flow_noc' or 'flow_occ'
                and 'colored_0' (KITTI 2012) or 'image_2' (KITTI 2015) '''
-        flow_occ_dir = 'flow_' + 'occ'
-        flow_noc_dir = 'flow_' + 'noc'
-        assert (self.root / flow_occ_dir).isdir()
-
-        img_dir = 'image_2'
-        assert (self.root / img_dir).isdir()
+        flow_occ_dir = 'flow_occ'
+        flow_noc_dir = 'flow_noc'
+        img_dir = 'image_2' if (self.root / 'image_2').is_dir() else 'colored_0'
+        assert (self.root / img_dir).is_dir()
 
         samples = []
-        for flow_map in sorted((self.root / flow_occ_dir).glob('*.png')):
+        for flow_map in sorted((self.root / img_dir).glob('*_10.png')):
             flow_map = flow_map.basename()
             root_filename = flow_map[:-7]
 
-            flow_occ_map = flow_occ_dir + '/' + flow_map
-            flow_noc_map = flow_noc_dir + '/' + flow_map
-            s = {'flow_occ': flow_occ_map, 'flow_noc': flow_noc_map}
+            s = {}
+            if self.with_flow:
+                flow_occ_map = flow_occ_dir + '/' + flow_map
+                flow_noc_map = flow_noc_dir + '/' + flow_map
+                s.update({'flow_occ': flow_occ_map, 'flow_noc': flow_noc_map})
 
             img1 = img_dir + '/' + root_filename + '_10.png'
             img2 = img_dir + '/' + root_filename + '_11.png'
-            assert (self.root / img1).isfile() and (self.root / img2).isfile()
-            s.update({'img1': img1, 'img2': img2})
+            assert (self.root / img1).is_file() and (self.root / img2).is_file()
+            imgs = [img1, img2]
             if self.n_frames == 3:
                 img0 = img_dir + '/' + root_filename + '_09.png'
-                assert (self.root / img0).isfile()
-                s.update({'img0': img0})
+                assert (self.root / img0).is_file()
+                imgs = [img0,] + imgs
+
+            s.update({'imgs': imgs})
             samples.append(s)
         return samples
 
@@ -408,27 +335,31 @@ if __name__ == "__main__":
     from easydict import EasyDict
     from transforms.geometric_transforms import get_geometric_transforms
     from transforms.photometric_transforms import get_photometric_transforms
+    from torch.utils.data import DataLoader
 
     geometric_transform = get_geometric_transforms(cfg=EasyDict({
-        #'crop': True,
-        #'crop_size': [100, 100],
-        #'hflip': True,
+        'crop': True,
+        'crop_size': [100, 100],
+        'hflip': True,
     }))
     photometric_transforms = get_photometric_transforms(cfg=EasyDict({
-        #'hue': 0.5,
+        'hue': 0.5,
         #'gamma': 0.5
         'swap_channels': True
     }))
-    dataset = Chairs(root="/home/deu/Datasets/FlyingChairs_release/data", with_flow=True,
-                     geometric_transform=geometric_transform, photometric_transform=photometric_transforms)
-    sample = dataset.__getitem__(100)
-    img1 = sample['img1'].numpy().transpose(1, 2, 0)
-    img2 = sample['img2'].numpy().transpose(1, 2, 0)
-    img1_ph = sample['img1_ph'].numpy().transpose(1, 2, 0)
-    img2_ph = sample['img2_ph'].numpy().transpose(1, 2, 0)
-    fig, ax = plt.subplots(2,2)
-    ax[0,0].imshow(img1)
-    ax[0,1].imshow(img2)
-    ax[1,0].imshow(img1_ph)
-    ax[1,1].imshow(img2_ph)
-    plt.show()
+    #dataset = Chairs(root="/home/deu/Datasets/FlyingChairs_release/data", with_flow=True,
+    #                 geometric_transform=geometric_transform, photometric_transform=photometric_transforms)
+    dataset = KITTIFlow(root="/home/deu/Datasets/KITTI_2012/training", with_flow=True, geometric_transform=geometric_transform,
+                        photometric_transform=photometric_transforms)
+    loader = DataLoader(dataset, batch_size=2)
+    for sample in loader:
+        img1 = sample['img1'][0].numpy().transpose(1, 2, 0)
+        img2 = sample['img2'][0].numpy().transpose(1, 2, 0)
+        img1_ph = sample['img1_ph'][0].numpy().transpose(1, 2, 0)
+        img2_ph = sample['img2_ph'][0].numpy().transpose(1, 2, 0)
+        fig, ax = plt.subplots(2,2)
+        ax[0,0].imshow(img1)
+        ax[0,1].imshow(img2)
+        ax[1,0].imshow(img1_ph)
+        ax[1,1].imshow(img2_ph)
+        plt.show()
