@@ -235,17 +235,30 @@ class CalibrationCurve:
         self.bins = np.linspace(0, self.cc_max, self.cc_samples)
 
     def __call__(self, gt_flows, pred_flows, pred_entropies):
-        sigma = np.exp(pred_entropies - 1/2 * np.log(2*np.pi*np.exp(1)))
-        bin_idx = np.digitize(sigma, self.bins)
-        error = np.abs(gt_flows - pred_flows)
-        
-        for idx in range(self.cc_samples):
-            self.errors[idx].extend(error[bin_idx == idx].reshape(-1))
+        for gt_flow, pred_flow, pred_entropy in zip(gt_flows, pred_flows, pred_entropies):
+            sigma = np.exp(pred_entropy - 1/2 * np.log(2*np.pi*np.exp(1)))
+            bin_idx = np.digitize(sigma, self.bins)
+            
+            # Copied from `evaluate_flow`
+            H, W = gt_flow.shape[:2]
+            h, w = pred_flow.shape[:2]
+            pred_flow = np.copy(pred_flow)
+            pred_flow[:, :, 0] = pred_flow[:, :, 0] / w * W
+            pred_flow[:, :, 1] = pred_flow[:, :, 1] / h * H
+
+            # Back to original size
+            pred_flow = cv2.resize(pred_flow, (W, H), interpolation=cv2.INTER_LINEAR)
+            error = pred_flow[:, :, :2] - gt_flow[:, :, :2]
+            
+            for idx in range(self.cc_samples):
+                self.errors[idx].extend(error[bin_idx == idx].reshape(-1))
 
     def calibration_curve(self):
         vals = list()  # middle value of bins
         means = list()  # should be close to vals
         sigmas = list()  # should be close to 0
+        
+        
                 
         for idx in range(self.cc_samples):
             val = (idx+0.5)*self.cc_max/(self.cc_samples-1)
@@ -286,7 +299,7 @@ def evaluate_uncertainty(gt_flows, pred_flows, pred_entropies, sp_samples=25):
         if gt_flow.shape[2] == 4:    # KITTY dataset includes masks in the third and fourth dimension
             mask = gt_flow[:, :, 2]
         else:
-            mask = torch.ones_like(epe_map)
+            mask = np.ones_like(epe_map)
         entropy_map = np.sum(pred_entropy[:, :, :2], axis=2)
         splot = sp_plot(epe_map, entropy_map, mask)
         oracle_splot = sp_plot(epe_map, epe_map, mask)     # Oracle

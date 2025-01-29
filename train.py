@@ -24,7 +24,7 @@ if __name__ == '__main__':
         cfg.train.update({
             'epoch_num': 1,
             'epoch_size': -1,
-            'valid_size': 50,
+            'valid_size': 0,
             'workers': 1,
             'valid_freq': 1,
             'track_auc': True
