@@ -285,11 +285,11 @@ class TrainFramework(BaseTrainer):
         
         vals, means, sigmas = cc.calibration_curve()
         plt.figure()
-        plt.stem(vals, means, 'r')
-        plt.stem(vals, sigmas)
+        plt.errorbar(vals, means, sigmas, fmt='o', linewidth=2, capsize=6)
+        plt.xlabel('sigma')
+        plt.ylabel('epe')
+        plt.grid()
         plt.savefig('foo.png')
-        
-       
         np.save("foo.npy", (vals, means, sigmas))
         
         self.model = torch.nn.DataParallel(self.model, device_ids=self.device_ids)

@@ -248,7 +248,7 @@ class CalibrationCurve:
 
             # Back to original size
             pred_flow = cv2.resize(pred_flow, (W, H), interpolation=cv2.INTER_LINEAR)
-            error = pred_flow[:, :, :2] - gt_flow[:, :, :2]
+            error = np.abs(pred_flow[:, :, :2] - gt_flow[:, :, :2])
             
             for idx in range(self.cc_samples):
                 self.errors[idx].extend(error[bin_idx == idx].reshape(-1))
@@ -259,8 +259,10 @@ class CalibrationCurve:
         sigmas = list()  # should be close to 0
         
         
-                
+        total_no_samples = 0        
         for idx in range(self.cc_samples):
+            total_no_samples += len(self.errors[idx])
+
             val = (idx+0.5)*self.cc_max/(self.cc_samples-1)
             mean = np.mean(self.errors[idx])
             var = np.var(self.errors[idx])
@@ -269,6 +271,8 @@ class CalibrationCurve:
             vals.append(val)
             means.append(mean)
             sigmas.append(sigma)
+            
+        print(f"Total number of samples in Calibration Curve: {total_no_samples}")
             
         return vals, means, sigmas
         
