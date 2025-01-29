@@ -248,10 +248,10 @@ def evaluate_uncertainty(gt_flows, pred_flows, pred_entropies, sp_samples=25):
 
         # Calculate sparsification plots
         epe_map = np.sqrt(np.sum(np.square(pred_flow[:, :, :2] - gt_flow[:, :, :2]), axis=2))
-        if gt_flow.shape[2] == 4:    # KITTY dataset includes masks in the third and fourth dimension
+        if gt_flow.shape[2] == 4:    # KITTY dataset includes masks in the third dimension
             mask = gt_flow[:, :, 2]
         else:
-            mask = torch.ones_like(epe_map)
+            mask = np.ones_like(epe_map)
         entropy_map = np.sum(pred_entropy[:, :, :2], axis=2)
         splot = sp_plot(epe_map, entropy_map, mask)
         oracle_splot = sp_plot(epe_map, epe_map, mask)     # Oracle

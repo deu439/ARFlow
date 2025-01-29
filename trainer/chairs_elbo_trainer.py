@@ -136,10 +136,10 @@ class TrainFramework(BaseTrainer):
         n_step = 0
         for i_set, loader in enumerate(self.valid_loader):
             error_names = ['Loss', 'l_ph', 'l_sm', 'entropy', 'l_oof', 'EPE']
-            if hasattr(self.cfg, 'track_auc') and self.cfg.track_auc:
-                error_names += ['AUC', 'AUC_diff']
             if hasattr(self.cfg, 'valid_masks') and self.cfg.valid_masks:
                 error_names += ['E_noc', 'E_occ', 'F1_all']
+            if hasattr(self.cfg, 'track_auc') and self.cfg.track_auc:
+                error_names += ['AUC', 'AUC_diff']
 
             error_meters = AverageMeter(i=len(error_names))
             splots = []
