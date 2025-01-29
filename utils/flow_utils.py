@@ -183,35 +183,35 @@ def evaluate_flow(gt_flows, pred_flows, moving_masks=None):
         return [error / B]
 
 
-def sp_plot(error, entropy, n=25, alpha=100.0, eps=1e-1):
-    def sp_mask(thr, entropy):
+def sp_plot(error, entropy, gt_mask, n=25, alpha=100.0, eps=1e-1):
+    def sp_mask(thr, entropy, gt_mask):
         mask = ss.expit(alpha * (thr[:, None, None] - entropy[None, :, :]))
-        frac = np.mean(1.0 - mask, axis=(1, 2))
-        return mask, frac
+        frac = np.sum((1.0 - mask)*gt_mask[None], axis=(1, 2)) / np.sum(gt_mask)[None]
+        return mask*gt_mask[None], frac
 
     # Find the primary interval for soft thresholding
     greatest = np.max(entropy) + eps    # Avoid zero-sized interval
     least = np.min(entropy) - eps
-    _, frac = sp_mask(np.array([least]), entropy)
+    _, frac = sp_mask(np.array([least]), entropy, gt_mask)
     while abs(frac.item() - 1.0) > eps:
         least -= 1e-3*(greatest - least)
-        _, frac = sp_mask(np.array([least]), entropy)
+        _, frac = sp_mask(np.array([least]), entropy, gt_mask)
 
-    _, frac = sp_mask(np.array([greatest]), entropy)
+    _, frac = sp_mask(np.array([greatest]), entropy, gt_mask)
     while abs(frac.item() - 0.0) > eps:
         greatest += 1e-3*(greatest - least)
-        _, frac = sp_mask(np.array([greatest]), entropy)
+        _, frac = sp_mask(np.array([greatest]), entropy, gt_mask)
 
     # Approximate uniform grid
     grid_entr = np.linspace(greatest, least, n)
     grid_frac = np.linspace(0, 1, n)
-    mask, frac = sp_mask(grid_entr, entropy)
+    mask, frac = sp_mask(grid_entr, entropy, gt_mask)
     for i in range(10):
         #print("res: ", np.max(np.abs(frac - grid_frac)))
         if np.max(np.abs(frac - grid_frac)) <= eps:
             break
         grid_entr = np.interp(grid_frac, frac, grid_entr)
-        mask, frac = sp_mask(grid_entr, entropy)
+        mask, frac = sp_mask(grid_entr, entropy, gt_mask)
 
     # Check whether the grid is approximately uniform
     if np.max(np.abs(frac - grid_frac)) > eps:
@@ -283,9 +283,13 @@ def evaluate_uncertainty(gt_flows, pred_flows, pred_entropies, sp_samples=25):
 
         # Calculate sparsification plots
         epe_map = np.sqrt(np.sum(np.square(pred_flow[:, :, :2] - gt_flow[:, :, :2]), axis=2))
+        if gt_flow.shape[2] == 4:    # KITTY dataset includes masks in the third and fourth dimension
+            mask = gt_flow[:, :, 2]
+        else:
+            mask = torch.ones_like(epe_map)
         entropy_map = np.sum(pred_entropy[:, :, :2], axis=2)
-        splot = sp_plot(epe_map, entropy_map)
-        oracle_splot = sp_plot(epe_map, epe_map)     # Oracle
+        splot = sp_plot(epe_map, entropy_map, mask)
+        oracle_splot = sp_plot(epe_map, epe_map, mask)     # Oracle
 
         # Collect the sparsification plots and oracle sparsification plots
         splots += [splot]
@@ -297,4 +301,3 @@ def evaluate_uncertainty(gt_flows, pred_flows, pred_entropies, sp_samples=25):
         oracle_auc += np.trapz(oracle_splot / oracle_splot[0], x=frac)
 
     return [auc / batch_size, (auc - oracle_auc) / batch_size], splots, oracle_splots
-

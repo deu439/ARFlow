@@ -26,8 +26,8 @@ if __name__ == '__main__':
             'epoch_size': -1,
             'valid_size': 50,
             'workers': 1,
-            'val_epoch_size': 1,
             'valid_freq': 1,
+            'track_auc': True
         })
 
     if args.model is not None:
