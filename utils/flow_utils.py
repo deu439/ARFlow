@@ -228,7 +228,7 @@ def sp_plot(error, entropy, gt_mask, n=25, alpha=100.0, eps=1e-1):
 
 
 class CalibrationCurve:
-    def __init__(self, cc_max=2, cc_samples=25):
+    def __init__(self, cc_max=1.0, cc_samples=100):
         self.cc_max = cc_max
         self.cc_samples = cc_samples
         self.errors = defaultdict(list)
@@ -236,7 +236,7 @@ class CalibrationCurve:
 
     def __call__(self, gt_flows, pred_flows, pred_entropies):
         for gt_flow, pred_flow, pred_entropy in zip(gt_flows, pred_flows, pred_entropies):
-            sigma = np.exp(pred_entropy - 1/2 * np.log(2*np.pi*np.exp(1)))
+            sigma = np.exp(pred_entropy) # - 1/2 * np.log(2*np.pi*np.exp(1)))
             bin_idx = np.digitize(sigma, self.bins)
             
             # Copied from `evaluate_flow`
@@ -250,19 +250,19 @@ class CalibrationCurve:
             pred_flow = cv2.resize(pred_flow, (W, H), interpolation=cv2.INTER_LINEAR)
             error = np.abs(pred_flow[:, :, :2] - gt_flow[:, :, :2])
             
-            for idx in range(self.cc_samples):
+            for idx in range(self.cc_samples + 1):
                 self.errors[idx].extend(error[bin_idx == idx].reshape(-1))
 
     def calibration_curve(self):
         vals = list()  # middle value of bins
         means = list()  # should be close to vals
         sigmas = list()  # should be close to 0
-        
+        numbers = list()
         
         total_no_samples = 0        
-        for idx in range(self.cc_samples):
+        for idx in range(self.cc_samples + 1):
             total_no_samples += len(self.errors[idx])
-
+            numbers.append(len(self.errors[idx]))
             val = (idx+0.5)*self.cc_max/(self.cc_samples-1)
             mean = np.mean(self.errors[idx])
             var = np.var(self.errors[idx])
@@ -274,7 +274,7 @@ class CalibrationCurve:
             
         print(f"Total number of samples in Calibration Curve: {total_no_samples}")
             
-        return vals, means, sigmas
+        return vals, means, sigmas, numbers
         
 
 

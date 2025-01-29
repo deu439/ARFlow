@@ -283,14 +283,19 @@ class TrainFramework(BaseTrainer):
             all_error_names.extend(['{}_{}'.format(name, i_set) for name in error_names])
 
         
-        vals, means, sigmas = cc.calibration_curve()
+        vals, means, sigmas, numbers = cc.calibration_curve()
         plt.figure()
         plt.errorbar(vals, means, sigmas, fmt='o', linewidth=2, capsize=6)
         plt.xlabel('sigma')
         plt.ylabel('epe')
         plt.grid()
         plt.savefig('foo.png')
-        np.save("foo.npy", (vals, means, sigmas))
+        
+        plt.figure()
+        plt.stem(vals, numbers)
+        plt.savefig('numbers.png')
+        
+        np.save("foo.npy", (vals, means, sigmas, numbers))
         
         self.model = torch.nn.DataParallel(self.model, device_ids=self.device_ids)
         # In order to reduce the space occupied during debugging,
