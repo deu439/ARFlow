@@ -3,7 +3,6 @@ from . import kitti_trainer
 from . import chairs_trainer
 from . import chairs_elbo_trainer
 from . import sintel_elbo_trainer
-from . import chairs_mse_trainer
 
 def get_trainer(name):
     if name == 'Sintel':

@@ -266,13 +266,13 @@ class Chairs(ImgSeqDataset):
 
             s = {'imgs': [self.root / '{:05d}_img{:d}.ppm'.format(fid, i+1) for i in range(self.n_frames)]}
             try:
-                assert all([p.isfile() for p in s['imgs']])
+                assert all([p.is_file() for p in s['imgs']])
 
                 if self.with_flow:
                     if self.n_frames == 2:
                         # for img1 img2, flow_12 will be evaluated
                         s['flow'] = flow_map
-                        assert s['flow'].isfile()
+                        assert s['flow'].is_file()
                     else:
                         raise NotImplementedError(
                             'n_frames {} with flow or mask'.format(self.n_frames))

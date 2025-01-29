@@ -24,9 +24,10 @@ if __name__ == '__main__':
         cfg.train.update({
             'epoch_num': 1,
             'epoch_size': -1,
-            'valid_size': 0,
+            'valid_size': 50,
             'workers': 1,
             'val_epoch_size': 1,
+            'valid_freq': 1,
         })
 
     if args.model is not None:

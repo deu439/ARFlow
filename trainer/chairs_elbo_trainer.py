@@ -1,7 +1,7 @@
 import time
 import torch
 from .base_trainer import BaseTrainer
-from utils.flow_utils import evaluate_flow, torch_flow2rgb, evaluate_uncertainty
+from utils.flow_utils import evaluate_flow, torch_flow2rgb, evaluate_uncertainty, CalibrationCurve
 from utils.misc_utils import AverageMeter, matplot_fig_to_numpy, mixture_entropy
 import utils.uflow_utils as uflow_utils
 #from triag_solve_cuda import inverse_diagonal
@@ -134,6 +134,8 @@ class TrainFramework(BaseTrainer):
         all_error_avgs = []
 
         n_step = 0
+        if self.cfg.track_auc:
+            cc = CalibrationCurve()
         for i_set, loader in enumerate(self.valid_loader):
             error_names = ['Loss', 'l_ph', 'l_sm', 'entropy', 'l_oof', 'EPE']
             if hasattr(self.cfg, 'track_auc') and self.cfg.track_auc:
@@ -204,6 +206,8 @@ class TrainFramework(BaseTrainer):
                     splots += splot
                     oplots += oplot
                     error_values += auc
+                    
+                    cc(gt_flows=gt_flows, pred_flows=pred_flows, pred_entropies=uv_entropy_np)
 
                 # Update error meters
                 error_meters.update(error_values, img1.size(0))
@@ -278,6 +282,16 @@ class TrainFramework(BaseTrainer):
             all_error_avgs.extend(error_meters.avg)
             all_error_names.extend(['{}_{}'.format(name, i_set) for name in error_names])
 
+        
+        vals, means, sigmas = cc.calibration_curve()
+        plt.figure()
+        plt.stem(vals, means, 'r')
+        plt.stem(vals, sigmas)
+        plt.savefig('foo.png')
+        
+       
+        np.save("foo.npy", (vals, means, sigmas))
+        
         self.model = torch.nn.DataParallel(self.model, device_ids=self.device_ids)
         # In order to reduce the space occupied during debugging,
         # only the model with more than cfg.save_iter iterations will be saved.
