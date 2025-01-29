@@ -4,6 +4,7 @@ import numpy as np
 from matplotlib.colors import hsv_to_rgb
 import scipy.special as ss
 import math
+from collections import defaultdict
 
 def load_flow(path):
     if path.endswith('.png'):
@@ -224,6 +225,57 @@ def sp_plot(error, entropy, gt_mask, n=25, alpha=100.0, eps=1e-1):
     splot = np.interp(grid_frac, frac, splot)
 
     return splot
+
+
+class CalibrationCurve:
+    def __init__(self, cc_max=2, cc_samples=25):
+        self.cc_max = cc_max
+        self.cc_samples = cc_samples
+        self.errors = defaultdict(list)
+        self.bins = np.linspace(0, self.cc_max, self.cc_samples)
+
+    def __call__(self, gt_flows, pred_flows, pred_entropies):
+        for gt_flow, pred_flow, pred_entropy in zip(gt_flows, pred_flows, pred_entropies):
+            sigma = np.exp(pred_entropy - 1/2 * np.log(2*np.pi*np.exp(1)))
+            bin_idx = np.digitize(sigma, self.bins)
+            
+            # Copied from `evaluate_flow`
+            H, W = gt_flow.shape[:2]
+            h, w = pred_flow.shape[:2]
+            pred_flow = np.copy(pred_flow)
+            pred_flow[:, :, 0] = pred_flow[:, :, 0] / w * W
+            pred_flow[:, :, 1] = pred_flow[:, :, 1] / h * H
+
+            # Back to original size
+            pred_flow = cv2.resize(pred_flow, (W, H), interpolation=cv2.INTER_LINEAR)
+            error = np.abs(pred_flow[:, :, :2] - gt_flow[:, :, :2])
+            
+            for idx in range(self.cc_samples):
+                self.errors[idx].extend(error[bin_idx == idx].reshape(-1))
+
+    def calibration_curve(self):
+        vals = list()  # middle value of bins
+        means = list()  # should be close to vals
+        sigmas = list()  # should be close to 0
+        
+        
+        total_no_samples = 0        
+        for idx in range(self.cc_samples):
+            total_no_samples += len(self.errors[idx])
+
+            val = (idx+0.5)*self.cc_max/(self.cc_samples-1)
+            mean = np.mean(self.errors[idx])
+            var = np.var(self.errors[idx])
+            sigma = np.sqrt(var)
+            
+            vals.append(val)
+            means.append(mean)
+            sigmas.append(sigma)
+            
+        print(f"Total number of samples in Calibration Curve: {total_no_samples}")
+            
+        return vals, means, sigmas
+        
 
 
 def evaluate_uncertainty(gt_flows, pred_flows, pred_entropies, sp_samples=25):

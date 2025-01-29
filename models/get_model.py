@@ -3,7 +3,6 @@ from .pwclite_prob import PWCLiteProb
 from .pwclite_uflow import PWCLiteUflow
 from .uflow_model import PWCFlow
 from .uflow_prob_model import PWCProbFlow, ComponentNet
-from .flownet_probout import FlowNetProbOut
 
 
 def get_model(cfg):
