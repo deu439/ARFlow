@@ -68,7 +68,7 @@
     "epoch_num": 2000,
     "epoch_size": 1000,
     "lr": 0.0001,
-    "lr_decay_start_epoch": 1800,
+    "lr_decay_start_epoch": 1500,
     "lr_decay_factor": 0.98,
     "momentum": 0.9,
     "n_gpu": 1,
