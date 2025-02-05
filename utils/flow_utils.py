@@ -228,7 +228,7 @@ def sp_plot(error, entropy, gt_mask, n=25, alpha=100.0, eps=1e-1):
 
 
 class CalibrationCurve:
-    def __init__(self, cc_max=1.0, cc_samples=100):
+    def __init__(self, cc_max=3.5, cc_samples=100):
         self.cc_max = cc_max
         self.cc_samples = cc_samples
         self.errors = defaultdict(list)
