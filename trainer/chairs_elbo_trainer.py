@@ -134,7 +134,7 @@ class TrainFramework(BaseTrainer):
         all_error_avgs = []
 
         n_step = 0
-        if self.cfg.track_auc:
+        if hasattr(self.cfg, 'track_cc') and self.cfg.track_cc:
             cc = CalibrationCurve()
         for i_set, loader in enumerate(self.valid_loader):
             error_names = ['Loss', 'l_ph', 'l_sm', 'entropy', 'l_oof', 'EPE']
@@ -200,14 +200,15 @@ class TrainFramework(BaseTrainer):
                         uv_entropy = uflow_utils.upsample(uv_entropy + 2 * math.log(4), scale_factor=4, is_flow=False, align_corners=False)
 
                 # Evaluate AUC if needed
+                uv_entropy_np = flows[0][:, 2:4].detach().cpu().numpy().transpose([0, 2, 3, 1])
+                if hasattr(self.cfg, "track_cc") and self.cfg.track_cc:
+                    cc(gt_flows=gt_flows, pred_flows=pred_flows, pred_entropies=uv_entropy_np)
                 if self.cfg.track_auc:
-                    uv_entropy_np = uv_entropy.detach().cpu().numpy().transpose([0, 2, 3, 1])
                     auc, splot, oplot = evaluate_uncertainty(gt_flows, pred_flows, uv_entropy_np, sp_samples=self.cfg.sp_samples)
                     splots += splot
                     oplots += oplot
                     error_values += auc
                     
-                    cc(gt_flows=gt_flows, pred_flows=pred_flows, pred_entropies=uv_entropy_np)
 
                 # Update error meters
                 error_meters.update(error_values, img1.size(0))
@@ -282,16 +283,17 @@ class TrainFramework(BaseTrainer):
             all_error_avgs.extend(error_meters.avg)
             all_error_names.extend(['{}_{}'.format(name, i_set) for name in error_names])
 
-        
-        vals, means, sigmas, numbers = cc.calibration_curve()
-        fig, ax = plt.subplots(1, 2, figsize=(30,10))
-        ax[0].errorbar(vals, means, sigmas, fmt='o', linewidth=2, capsize=6)
-        ax[0].set_xlabel('sigma')
-        ax[0].set_ylabel('epe')
-        ax[0].grid()
-        ax[1].stem(vals, numbers)
-        ax[1].set_yscale('log')
-        plt.savefig('foo.png')
+
+        if hasattr(self.cfg, 'track_cc') and self.cfg.track_cc:
+            vals, means, sigmas, numbers = cc.calibration_curve()
+            fig, ax = plt.subplots(1, 2, figsize=(30,10))
+            ax[0].errorbar(vals, means, sigmas, fmt='o', linewidth=2, capsize=6)
+            ax[0].set_xlabel('sigma')
+            ax[0].set_ylabel('epe')
+            ax[0].grid()
+            ax[1].stem(vals, numbers)
+            ax[1].set_yscale('log')
+            plt.savefig('foo.png')
         
         self.model = torch.nn.DataParallel(self.model, device_ids=self.device_ids)
         # In order to reduce the space occupied during debugging,

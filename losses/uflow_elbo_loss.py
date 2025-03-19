@@ -421,20 +421,15 @@ class UFlowElboLoss(nn.modules.Module):
         # Smoothness loss on level 2 #
         ##############################
         if self.cfg.closed_form_smooth:
-            if self.cfg.approx == 'diag':
+
+            if self.cfg.approx == 'diag' and self.cfg.order_smooth == 1:
                 # Get the weights
                 _, smooth_weight12_x, _, smooth_weight12_y = smooth_loss_no_penalty(
                     im1_0, flow12_2, self.cfg.edge_constant, self.cfg.edge_asymp
                 )
 
                 # Get the expected values of the squared differences
-                #E12_x = (mean12_2[:, :, :, 1:]**2 + diag12_2[:, :, :, 1:]**2
-                #           - 2*mean12_2[:, :, :, 1:]*mean12_2[:, :, :, :-1]
-                #           + mean12_2[:, :, :, :-1]**2 + diag12_2[:, :, :, :-1]**2)
                 E12_x = (mean12_2[:, :, :, 1:] - mean12_2[:, :, :, :-1])**2 + diag12_2[:, :, :, 1:]**2 + diag12_2[:, :, :, :-1]**2
-                #E12_y = (mean12_2[:, :, 1:] ** 2 + diag12_2[:, :, 1:] ** 2
-                #           - 2 * mean12_2[:, :, 1:] * mean12_2[:, :, :-1]
-                #           + mean12_2[:, :, :-1] ** 2 + diag12_2[:, :, :-1] ** 2)
                 E12_y = (mean12_2[:, :, 1:] - mean12_2[:, :, :-1])**2 + diag12_2[:, :, 1:]**2 + diag12_2[:, :, :-1]**2
 
                 E12_x = torch.mean(E12_x, dim=1)
@@ -457,9 +452,67 @@ class UFlowElboLoss(nn.modules.Module):
                     E21_x = torch.mean(E21_x, dim=1)
                     E21_y = torch.mean(E21_y, dim=1)
 
-                    # Compute optimal variational parameters and the loss
                     loss_smooth += torch.mean(smooth_weight21_x * self.cfg.w_smooth * penalty_func_smooth(E21_x)) \
                                   + torch.mean(smooth_weight21_y * self.cfg.w_smooth * penalty_func_smooth(E21_y))
+
+
+            if self.cfg.approx == 'diag' and self.cfg.order_smooth == 2:
+                # Get the weights
+                _, _, height, width = im1_0.size()
+                im1_2 = downsample(im1_0, is_flow=False, scale_factor=4.0)
+
+                # Forward -----------
+                im1_gx, im1_gy = image_grads(im1_2.detach(), stride=2)
+                smooth_weight12_x = self.cfg.edge_asymp + (1.0 - self.cfg.edge_asymp) * torch.exp(
+                    -torch.mean(torch.abs(self.cfg.edge_constant * im1_gx), 1, keepdim=True))
+                smooth_weight12_y = self.cfg.edge_asymp + (1.0 - self.cfg.edge_asymp) * torch.exp(
+                    -torch.mean(torch.abs(self.cfg.edge_constant * im1_gy), 1, keepdim=True))
+
+                # Get the expected values of the squared second-order differences
+                E12_xx = (
+                    (mean12_2[:, :, :, :-2] - 2*mean12_2[:, :, :, 1:-1] + mean12_2[:, :, :, 2:])**2
+                    + diag12_2[:, :, :, 0:-2]**2 + 4*diag12_2[:, :, :, 1:-1]**2 + diag12_2[:, :, :, 2:]**2
+                )
+                E12_yy = (
+                        (mean12_2[:, :, :-2] - 2*mean12_2[:, :, 1:-1] + mean12_2[:, :, 2:])**2
+                        + diag12_2[:, :, 0:-2]**2 + 4*diag12_2[:, :, 1:-1]**2 + diag12_2[:, :, 2:]**2
+                )
+
+                E12_xx = torch.mean(E12_xx, dim=1)
+                E12_yy = torch.mean(E12_yy, dim=1)
+
+                penalty_func_smooth = get_penalty(self.cfg.penalty_smooth)
+                loss_smooth = torch.mean(smooth_weight12_x * self.cfg.w_smooth * penalty_func_smooth(E12_xx)) \
+                              + torch.mean(smooth_weight12_y * self.cfg.w_smooth * penalty_func_smooth(E12_yy))
+
+                if self.cfg.with_bk:
+                    # Get the weights
+                    _, _, height, width = im2_0.size()
+                    im2_2 = downsample(im2_0, is_flow=False, scale_factor=4.0)
+
+                    # Forward -----------
+                    im2_gx, im2_gy = image_grads(im2_2.detach(), stride=2)
+                    smooth_weight21_x = self.cfg.edge_asymp + (1.0 - self.cfg.edge_asymp) * torch.exp(
+                        -torch.mean(torch.abs(self.cfg.edge_constant * im2_gx), 1, keepdim=True))
+                    smooth_weight21_y = self.cfg.edge_asymp + (1.0 - self.cfg.edge_asymp) * torch.exp(
+                        -torch.mean(torch.abs(self.cfg.edge_constant * im2_gy), 1, keepdim=True))
+
+                    # Get the expected values of the squared second-order differences
+                    E21_xx = (
+                            (mean21_2[:, :, :, :-2] - 2*mean21_2[:, :, :, 1:-1] + mean21_2[:, :, :, 2:])**2
+                            + diag21_2[:, :, :, 0:-2]**2 + 4*diag21_2[:, :, :, 1:-1]**2 + diag21_2[:, :, :, 2:]**2
+                    )
+                    E21_yy = (
+                            (mean21_2[:, :, :-2] - 2*mean21_2[:, :, 1:-1] + mean21_2[:, :, 2:])**2
+                            + diag21_2[:, :, 0:-2]**2 + 4*diag21_2[:, :, 1:-1]**2 + diag21_2[:, :, 2:]**2
+                    )
+
+                    E21_xx = torch.mean(E21_xx, dim=1)
+                    E21_yy = torch.mean(E21_yy, dim=1)
+
+                    penalty_func_smooth = get_penalty(self.cfg.penalty_smooth)
+                    loss_smooth += torch.mean(smooth_weight21_x * self.cfg.w_smooth * penalty_func_smooth(E21_xx)) \
+                                  + torch.mean(smooth_weight21_y * self.cfg.w_smooth * penalty_func_smooth(E21_yy))
 
             else:
                 raise NotImplementedError()

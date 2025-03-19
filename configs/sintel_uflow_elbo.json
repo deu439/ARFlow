@@ -32,6 +32,7 @@
     "edge_asymp": 0.01,
     "type": "uflow_elbo",
     "w_smooth": 4.0,
+    "order_smooth": 1,
     "penalty_smooth": "charbonnier",
     "closed_form_smooth": true,
     "data_loss": ["census"],
