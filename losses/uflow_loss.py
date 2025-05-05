@@ -59,23 +59,48 @@ class UFlowLoss(nn.modules.Module):
         im1_2 = downsample(im1_0, is_flow=False, scale_factor=4.0)
         im2_2 = downsample(im2_0, is_flow=False, scale_factor=4.0)
 
-        # Forward -----------
-        im1_gx, im1_gy = image_grads(im1_2.detach())
-        weights1_x = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im1_gx), 1, keepdim=True))
-        weights1_y = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im1_gy), 1, keepdim=True))
+        if self.cfg.smooth_order == 1:
+            # Forward -----------
+            im1_gx, im1_gy = image_grads(im1_2.detach())
+            weights1_x = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im1_gx), 1, keepdim=True))
+            weights1_y = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im1_gy), 1, keepdim=True))
 
-        flow12_gx, flow12_gy = image_grads(flow12_2)
-        loss_smooth = self.cfg.w_smooth * (torch.mean(weights1_x * robust_l1(flow12_gx**2))
-                                           + torch.mean(weights1_y * robust_l1(flow12_gy**2))) / 2.
-        if self.cfg.with_bk:
-            # Backward -----------
-            im2_gx, im2_gy = image_grads(im2_2.detach())
-            weights2_x = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im2_gx), 1, keepdim=True))
-            weights2_y = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im2_gy), 1, keepdim=True))
+            flow12_gx, flow12_gy = image_grads(flow12_2)
+            loss_smooth = self.cfg.w_smooth * (torch.mean(weights1_x * robust_l1(flow12_gx**2))
+                                               + torch.mean(weights1_y * robust_l1(flow12_gy**2))) / 2.
+            if self.cfg.with_bk:
+                # Backward -----------
+                im2_gx, im2_gy = image_grads(im2_2.detach())
+                weights2_x = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im2_gx), 1, keepdim=True))
+                weights2_y = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im2_gy), 1, keepdim=True))
 
-            flow21_gx, flow21_gy = image_grads(flow21_2)
-            loss_smooth += self.cfg.w_smooth * (torch.mean(weights2_x * robust_l1(flow21_gx**2))
-                                               + torch.mean(weights2_y * robust_l1(flow21_gy**2))) / 2.
+                flow21_gx, flow21_gy = image_grads(flow21_2)
+                loss_smooth += self.cfg.w_smooth * (torch.mean(weights2_x * robust_l1(flow21_gx**2))
+                                                   + torch.mean(weights2_y * robust_l1(flow21_gy**2))) / 2.
+
+        if self.cfg.smooth_order == 2:
+            # Forward -----------
+            im1_gx, im1_gy = image_grads(im1_2.detach(), stride=2)
+            weights1_x = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im1_gx), 1, keepdim=True))
+            weights1_y = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im1_gy), 1, keepdim=True))
+
+            flow12_gx, flow12_gy = image_grads(flow12_2)
+            flow12_gxx, _ = image_grads(flow12_gx)
+            _, flow12_gyy = image_grads(flow12_gy)
+            loss_smooth = self.cfg.w_smooth * (torch.mean(weights1_x * robust_l1(flow12_gxx**2))
+                                               + torch.mean(weights1_y * robust_l1(flow12_gyy**2))) / 2.
+            if self.cfg.with_bk:
+                # Backward -----------
+                im2_gx, im2_gy = image_grads(im2_2.detach(), stride=2)
+                weights2_x = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im2_gx), 1, keepdim=True))
+                weights2_y = torch.exp(-torch.mean(torch.abs(self.cfg.edge_constant * im2_gy), 1, keepdim=True))
+
+                flow21_gx, flow21_gy = image_grads(flow21_2)
+                flow21_gxx, _ = image_grads(flow21_gx)
+                _, flow21_gyy = image_grads(flow21_gy)
+                loss_smooth += self.cfg.w_smooth * (torch.mean(weights2_x * robust_l1(flow21_gxx**2))
+                                                    + torch.mean(weights2_y * robust_l1(flow21_gyy**2))) / 2.
+
 
         # Calculate total loss #
         ########################

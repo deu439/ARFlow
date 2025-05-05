@@ -10,6 +10,7 @@ from utils.uflow_utils import flow_to_warp, resample, compute_range_map, mask_in
      image_grads, upsample, downsample, ssim_loss
 #from utils.triag_solve import BackwardSubst, inverse_l1norm, matrix_vector_product_general, matrix_vector_product_T_general, NaturalGradientIdentityT, NaturalGradientIdentityC
 #from utils.triag_solve import matrix_vector_product_general, matrix_vector_product_T_general
+from utils.triag_solve import matrix_vector_product_general, matrix_vector_product_T_general
 from utils.misc_utils import gaussian_mixture_log_pdf
 from .penalty_functions import get_penalty
 
@@ -102,17 +103,6 @@ def log_gmm(x, pi, beta):
     w = pi * torch.sqrt(beta) / math.sqrt(2 * torch.pi)
     c = torch.max(arg, dim=-1).values
     return c + torch.log(torch.sum(w * torch.exp(arg - c.unsqueeze(-1)), dim=-1))
-
-
-class SlowDownIdentity(Function):
-    @staticmethod
-    def forward(ctx, A, B, C, X):
-        return A, B, C, X
-
-    @staticmethod
-    @once_differentiable
-    def backward(ctx, dA, dB, dC, dX):
-        return dA / 100.0, dB / 100.0, dC / 100.0, dX
 
 
 class UFlowElboLoss(nn.modules.Module):
@@ -279,13 +269,6 @@ class UFlowElboLoss(nn.modules.Module):
             #log_diag12_2 = torch.log(diag12_2)
             #log_diag21_2 = torch.log(diag21_2)
 
-        if self.cfg.slow_down:
-            raise NotImplementedError("Slowing-down is not implemented!")
-            #diag12_2, left12_2, over12_2, mean12_2 = SlowDownIdentity.apply(diag12_2, left12_2, over12_2, mean12_2)
-            #diag21_2, left21_2, over21_2, mean21_2 = SlowDownIdentity.apply(diag21_2, left21_2, over21_2, mean21_2)
-            ## Update the log values
-            #log_diag12_2 = torch.log(diag12_2)
-            #log_diag21_2 = torch.log(diag21_2)
 
         # Regularization of the off-diagonal entries #
         ##############################################

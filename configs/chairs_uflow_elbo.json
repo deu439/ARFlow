@@ -1,5 +1,5 @@
  {"data": [{
-          "root_chairs": "/home/georg/ssdata/flying_chairs/FlyingChairs_release/data",
+          "root_chairs": "/home/deu/Datasets/FlyingChairs_release/data",
           "test_shape": [384, 512],
           "train_n_frames": 2,
           "type": "Chairs",

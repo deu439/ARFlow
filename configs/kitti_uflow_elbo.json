@@ -1,27 +1,13 @@
 {
   "data": [
     {
-      "root": "/home/deu/Datasets/KITTI_2012/testing",
+      "root": "/home/deu/Datasets/KITTI_2015_multiview/testing",
       "split": "train",
-      "type": "KITTI",
+      "type": "KITTIMV",
       "n_frames": 2,
       "geometric_aug": {
         "scale": true,
-        "scale_size": [384, 1248]
-      },
-      "photometric_aug": {
-        "hue": 0.5,
-        "swap_channels": true
-      }
-    },
-    {
-      "root": "/home/deu/Datasets/KITTI_2015/testing",
-      "split": "train",
-      "type": "KITTI",
-      "n_frames": 2,
-      "geometric_aug": {
-        "scale": true,
-        "scale_size": [384, 1248]
+        "scale_size": [640, 640]
       },
       "photometric_aug": {
         "hue": 0.5,
@@ -33,14 +19,14 @@
       "split": "test",
       "type": "KITTI",
       "n_frames": 2,
-      "test_shape": [384, 1248]
+      "test_shape": [640, 640]
     },
     {
       "root": "/home/deu/Datasets/KITTI_2015/training",
       "split": "test",
       "type": "KITTI",
       "n_frames": 2,
-      "test_shape": [384, 1248]
+      "test_shape": [640, 640]
     }
   ],
   "loss": {

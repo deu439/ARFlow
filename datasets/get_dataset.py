@@ -2,7 +2,7 @@ from torch.utils.data import ConcatDataset
 from transforms.geometric_transforms import get_geometric_transforms, Compose, Scale
 from transforms.photometric_transforms import get_photometric_transforms
 from datasets.flow_datasets import Sintel
-from datasets.flow_datasets import KITTIFlow
+from datasets.flow_datasets import KITTIFlow, KITTIFlowMV
 from datasets.flow_datasets import Chairs, Chairs2
 
 
@@ -69,6 +69,17 @@ def get_dataset(all_cfg):
 
             else:
                 valid_set_1 = KITTIFlow(cfg.root, n_frames=cfg.n_frames, geometric_transform=valid_transform)
+                valid_set += [valid_set_1]
+
+        elif cfg.type == 'KITTIMV':
+            if cfg.split == 'train':
+                train_set_1 = KITTIFlowMV(cfg.root, n_frames=cfg.n_frames,
+                                        geometric_transform=geometric_transform,
+                                        photometric_transform=photometric_transform)
+                train_set += [train_set_1]
+
+            else:
+                valid_set_1 = KITTIFlowMV(cfg.root, n_frames=cfg.n_frames, geometric_transform=valid_transform)
                 valid_set += [valid_set_1]
 
         else:

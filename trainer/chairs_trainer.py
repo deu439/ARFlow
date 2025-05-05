@@ -110,6 +110,8 @@ class TrainFramework(BaseTrainer):
         n_step = 0
         for i_set, loader in enumerate(self.valid_loader):
             error_names = ['EPE']
+            if hasattr(self.cfg, 'valid_masks') and self.cfg.valid_masks:
+                error_names += ['E_noc', 'E_occ', 'F1_all']
             error_meters = AverageMeter(i=len(error_names))
             for i_step, data in enumerate(loader):
                 img1, img2 = data['img1'], data['img2']
@@ -150,7 +152,7 @@ class TrainFramework(BaseTrainer):
 
             # write predicted and true flow to tf board
             gt_flow = data['target']['flow']
-            image = torch_flow2rgb(gt_flow.cpu())
+            image = torch_flow2rgb(gt_flow[:, :2].cpu())
             self.summary_writer.add_images(f"Valid/gt", image, self.i_epoch)
             image = torch_flow2rgb(flows_12[0].cpu())
             self.summary_writer.add_images("Valid/pred_{}".format(i_set), image, self.i_epoch)

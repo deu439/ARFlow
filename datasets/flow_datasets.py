@@ -266,13 +266,13 @@ class Chairs(ImgSeqDataset):
 
             s = {'imgs': [self.root / '{:05d}_img{:d}.ppm'.format(fid, i+1) for i in range(self.n_frames)]}
             try:
-                assert all([p.is_file() for p in s['imgs']])
+                assert all([p.isfile() for p in s['imgs']])
 
                 if self.with_flow:
                     if self.n_frames == 2:
                         # for img1 img2, flow_12 will be evaluated
                         s['flow'] = flow_map
-                        assert s['flow'].is_file()
+                        assert s['flow'].isfile()
                     else:
                         raise NotImplementedError(
                             'n_frames {} with flow or mask'.format(self.n_frames))
@@ -284,6 +284,42 @@ class Chairs(ImgSeqDataset):
 
         return samples
 
+
+class KITTIFlowMV(ImgSeqDataset):
+    """
+    This dataset is used for unsupervised training only
+    """
+
+    def __init__(self, root, n_frames=2, geometric_transform=None, photometric_transform=None):
+        super(KITTIFlowMV, self).__init__(root, n_frames, geometric_transform=geometric_transform,
+                                        photometric_transform=photometric_transform)
+
+    def collect_samples(self):
+        img_dir = 'image_2'
+        assert (self.root / img_dir).isdir()
+
+        samples = []
+        for filename in sorted((self.root / img_dir).glob('*.png')):
+            filename = filename.basename()
+            root_filename = filename[:-7]
+
+            img_list = (self.root / img_dir).files('*{}*.png'.format(root_filename))
+            img_list.sort()
+
+            for st in range(0, len(img_list) - self.n_frames + 1):
+                seq = img_list[st:st + self.n_frames]
+                sample = {}
+                sample['imgs'] = []
+                for i, file in enumerate(seq):
+                    # We dont want to skip frames 10, 11
+                    # frame_id = int(file[-6:-4])
+                    #if 12 >= frame_id >= 9:
+                    #    break
+                    sample['imgs'].append(self.root.relpathto(file))
+                if len(sample['imgs']) == self.n_frames:
+                    samples.append(sample)
+
+        return samples
 
 class KITTIFlow(ImgSeqDataset):
     """
@@ -302,8 +338,8 @@ class KITTIFlow(ImgSeqDataset):
                and 'colored_0' (KITTI 2012) or 'image_2' (KITTI 2015) '''
         flow_occ_dir = 'flow_occ'
         flow_noc_dir = 'flow_noc'
-        img_dir = 'image_2' if (self.root / 'image_2').is_dir() else 'colored_0'
-        assert (self.root / img_dir).is_dir()
+        img_dir = 'image_2' if (self.root / 'image_2').isdir() else 'colored_0'
+        assert (self.root / img_dir).isdir()
 
         samples = []
         for flow_map in sorted((self.root / img_dir).glob('*_10.png')):
@@ -318,11 +354,11 @@ class KITTIFlow(ImgSeqDataset):
 
             img1 = img_dir + '/' + root_filename + '_10.png'
             img2 = img_dir + '/' + root_filename + '_11.png'
-            assert (self.root / img1).is_file() and (self.root / img2).is_file()
+            assert (self.root / img1).isfile() and (self.root / img2).isfile()
             imgs = [img1, img2]
             if self.n_frames == 3:
                 img0 = img_dir + '/' + root_filename + '_09.png'
-                assert (self.root / img0).is_file()
+                assert (self.root / img0).isfile()
                 imgs = [img0,] + imgs
 
             s.update({'imgs': imgs})
@@ -349,17 +385,20 @@ if __name__ == "__main__":
     }))
     #dataset = Chairs(root="/home/deu/Datasets/FlyingChairs_release/data", with_flow=True,
     #                 geometric_transform=geometric_transform, photometric_transform=photometric_transforms)
-    dataset = KITTIFlow(root="/home/deu/Datasets/KITTI_2012/training", with_flow=True, geometric_transform=geometric_transform,
-                        photometric_transform=photometric_transforms)
-    loader = DataLoader(dataset, batch_size=2)
-    for sample in loader:
-        img1 = sample['img1'][0].numpy().transpose(1, 2, 0)
-        img2 = sample['img2'][0].numpy().transpose(1, 2, 0)
-        img1_ph = sample['img1_ph'][0].numpy().transpose(1, 2, 0)
-        img2_ph = sample['img2_ph'][0].numpy().transpose(1, 2, 0)
-        fig, ax = plt.subplots(2,2)
-        ax[0,0].imshow(img1)
-        ax[0,1].imshow(img2)
-        ax[1,0].imshow(img1_ph)
-        ax[1,1].imshow(img2_ph)
-        plt.show()
+    #dataset = KITTIFlow(root="/home/deu/Datasets/KITTI_2012/training", with_flow=True, geometric_transform=geometric_transform,
+    #                    photometric_transform=photometric_transforms)
+    dataset = KITTIFlowMV(root="/home/deu/Datasets/KITTI_2015_multiview/training", n_frames=2, geometric_transform=None,
+                        photometric_transform=None)
+    #loader = DataLoader(dataset, batch_size=1)
+    print(len(dataset))
+    #for sample in loader:
+    #    img1 = sample['img1'][0].numpy().transpose(1, 2, 0)
+    #    img2 = sample['img2'][0].numpy().transpose(1, 2, 0)
+    #    #img1_ph = sample['img1_ph'][0].numpy().transpose(1, 2, 0)
+    #    #img2_ph = sample['img2_ph'][0].numpy().transpose(1, 2, 0)
+    #    fig, ax = plt.subplots(2,1, figsize=(10,5))
+    #    ax[0].imshow(img1)
+    #    ax[1].imshow(img2)
+    #    #ax[1,0].imshow(img1_ph)
+    #    #ax[1,1].imshow(img2_ph)
+    #    plt.show()
