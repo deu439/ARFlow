@@ -1,0 +1,69 @@
+{
+  "data": [
+    {
+      "root": "/home/deu/Datasets/KITTI_2015_multiview/testing",
+      "split": "train",
+      "type": "KITTIMV",
+      "n_frames": 2,
+      "geometric_aug": {
+        "scale": true,
+        "scale_size": [640, 640]
+      },
+      "photometric_aug": {
+        "hue": 0.5,
+        "swap_channels": true
+      }
+    },
+    {
+      "root": "/home/deu/Datasets/KITTI_2012/training",
+      "split": "test",
+      "type": "KITTI",
+      "n_frames": 2,
+      "test_shape": [640, 640]
+    },
+    {
+      "root": "/home/deu/Datasets/KITTI_2015/training",
+      "split": "test",
+      "type": "KITTI",
+      "n_frames": 2,
+      "test_shape": [640, 640]
+    }
+  ],
+  "loss": {"edge_constant": 150,
+    "type": "uflow",
+    "w_smooth": 4.0,
+    "w_census": 1.0,
+    "with_bk": true,
+    "smooth_order": 2
+  },
+  "model": {"type": "uflow",
+    "feature_norm": true,
+    "level_dropout": 0.1
+  },
+  "seed": 0,
+  "train": {
+    "batch_size": 8,
+    "bias_decay": 0,
+    "epoch_num": 1000,
+    "epoch_size": 1000,
+    "lr": 0.0001,
+    "lr_decay_start_epoch": 800,
+    "lr_decay_factor": 0.98,
+    "momentum": 0.9,
+    "n_gpu": 1,
+    "optim": "adam",
+    "beta1": 0.9,
+    "beta2": 0.999,
+    "weight_decay": 0.0,
+    "eps": 1e-8,
+    "pretrained_model": "outputs/checkpoints/230905/231928/Sintel_model_best.pth.tar",
+    "print_freq": 10,
+    "record_freq": 10,
+    "save_iter": 10000,
+    "valid_freq": 10,
+    "valid_size": 0,
+    "workers": 4,
+    "valid_masks": true
+  },
+  "trainer": "Chairs"
+}

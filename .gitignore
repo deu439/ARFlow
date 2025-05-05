@@ -5,3 +5,7 @@ venv/
 utils/triag_solve/build
 utils/triag_solve/dist
 *.egg-info
+/clip/
+/checkpoints/
+/examples/
+/outputs/
