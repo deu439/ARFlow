@@ -35,6 +35,7 @@
     "type": "uflow_elbo",
     "w_smooth": 4.0,
     "order_smooth": 2,
+    "isotropic_smooth": true,
     "penalty_smooth": "charbonnier",
     "closed_form_smooth": true,
     "data_loss": ["census"],

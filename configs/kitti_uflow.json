@@ -42,7 +42,7 @@
   },
   "seed": 0,
   "train": {
-    "batch_size": 8,
+    "batch_size": 4,
     "bias_decay": 0,
     "epoch_num": 1000,
     "epoch_size": 1000,

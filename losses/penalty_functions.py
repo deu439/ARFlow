@@ -4,15 +4,9 @@ def abs_robust_loss(diff, eps=0.01, q=0.4):
     return torch.pow((torch.abs(diff) + eps), q)
 
 def charbonnier(x_sq, eps=0.001):
-    if type(x_sq) is list:
-        x_sq = sum(x_sq)
-
     return torch.sqrt(x_sq + eps**2)
 
 def charbonnier_prime(x_sq, eps=0.001):
-    if type(x_sq) is list:
-        x_sq = sum(x_sq)
-
     return 1 / (2 * torch.sqrt(x_sq + eps**2))
 
 def identity(x):

@@ -415,8 +415,9 @@ class UFlowElboLoss(nn.modules.Module):
                 E12_x = (mean12_2[:, :, :, 1:] - mean12_2[:, :, :, :-1])**2 + diag12_2[:, :, :, 1:]**2 + diag12_2[:, :, :, :-1]**2
                 E12_y = (mean12_2[:, :, 1:] - mean12_2[:, :, :-1])**2 + diag12_2[:, :, 1:]**2 + diag12_2[:, :, :-1]**2
 
-                E12_x = torch.mean(E12_x, dim=1)
-                E12_y = torch.mean(E12_y, dim=1)
+                if self.cfg.isotropic_smooth:
+                    E12_x = torch.mean(E12_x, dim=1)
+                    E12_y = torch.mean(E12_y, dim=1)
 
                 penalty_func_smooth = get_penalty(self.cfg.penalty_smooth)
                 loss_smooth = torch.mean(smooth_weight12_x * self.cfg.w_smooth * penalty_func_smooth(E12_x)) \
@@ -432,14 +433,15 @@ class UFlowElboLoss(nn.modules.Module):
                     E21_x = (mean21_2[:, :, :, 1:] - mean21_2[:, :, :, :-1]) ** 2 + diag21_2[:, :, :, 1:] ** 2 + diag21_2[:, :, :, :-1] ** 2
                     E21_y = (mean21_2[:, :, 1:] - mean21_2[:, :, :-1]) ** 2 + diag21_2[:, :, 1:] ** 2 + diag21_2[:, :, :-1] ** 2
 
-                    E21_x = torch.mean(E21_x, dim=1)
-                    E21_y = torch.mean(E21_y, dim=1)
+                    if self.cfg.isotropic_smooth:
+                        E21_x = torch.mean(E21_x, dim=1)
+                        E21_y = torch.mean(E21_y, dim=1)
 
                     loss_smooth += torch.mean(smooth_weight21_x * self.cfg.w_smooth * penalty_func_smooth(E21_x)) \
                                   + torch.mean(smooth_weight21_y * self.cfg.w_smooth * penalty_func_smooth(E21_y))
 
 
-            if self.cfg.approx == 'diag' and self.cfg.order_smooth == 2:
+            elif self.cfg.approx == 'diag' and self.cfg.order_smooth == 2:
                 # Get the weights
                 _, _, height, width = im1_0.size()
                 im1_2 = downsample(im1_0, is_flow=False, scale_factor=4.0)
@@ -461,8 +463,9 @@ class UFlowElboLoss(nn.modules.Module):
                         + diag12_2[:, :, 0:-2]**2 + 4*diag12_2[:, :, 1:-1]**2 + diag12_2[:, :, 2:]**2
                 )
 
-                E12_xx = torch.mean(E12_xx, dim=1)
-                E12_yy = torch.mean(E12_yy, dim=1)
+                if self.cfg.isotropic_smooth:
+                    E12_xx = torch.mean(E12_xx, dim=1)
+                    E12_yy = torch.mean(E12_yy, dim=1)
 
                 penalty_func_smooth = get_penalty(self.cfg.penalty_smooth)
                 loss_smooth = torch.mean(smooth_weight12_x * self.cfg.w_smooth * penalty_func_smooth(E12_xx)) \
@@ -490,8 +493,9 @@ class UFlowElboLoss(nn.modules.Module):
                             + diag21_2[:, :, 0:-2]**2 + 4*diag21_2[:, :, 1:-1]**2 + diag21_2[:, :, 2:]**2
                     )
 
-                    E21_xx = torch.mean(E21_xx, dim=1)
-                    E21_yy = torch.mean(E21_yy, dim=1)
+                    if self.cfg.isotropic_smooth:
+                        E21_xx = torch.mean(E21_xx, dim=1)
+                        E21_yy = torch.mean(E21_yy, dim=1)
 
                     penalty_func_smooth = get_penalty(self.cfg.penalty_smooth)
                     loss_smooth += torch.mean(smooth_weight21_x * self.cfg.w_smooth * penalty_func_smooth(E21_xx)) \
@@ -507,15 +511,26 @@ class UFlowElboLoss(nn.modules.Module):
                 im1_0, flow12_2, self.cfg.edge_constant, self.cfg.edge_asymp
             )
             # In contrast to data loss, the smoothness loss is AVERAGED over pixels (comes from the UFlow code)
-            loss_smooth = torch.mean(smooth_weight12_x * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss12_x**2, dim=1))) \
-                          + torch.mean(smooth_weight12_y * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss12_y**2, dim=1)))
+            smooth_loss12_x = smooth_loss12_x**2
+            smooth_loss12_y = smooth_loss12_y**2
+            if self.cfg.isotropic_smooth:
+                smooth_loss12_x = torch.mean(smooth_loss12_x, dim=1)
+                smooth_loss12_y = torch.mean(smooth_loss12_y, dim=1)
+
+            loss_smooth = torch.mean(smooth_weight12_x * self.cfg.w_smooth * penalty_func_smooth(smooth_loss12_x)) \
+                          + torch.mean(smooth_weight12_y * self.cfg.w_smooth * penalty_func_smooth(smooth_loss12_y))
             if self.cfg.with_bk:
                 # Here the arguments are passed in reversed order!
                 smooth_loss21_x, smooth_weight21_x, smooth_loss21_y, smooth_weight21_y = smooth_loss_no_penalty(
                     im2_0, flow21_2, self.cfg.edge_constant, self.cfg.edge_asymp
                 )
-                loss_smooth += torch.mean(smooth_weight21_x * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss21_x**2, dim=1))) \
-                              + torch.mean(smooth_weight21_y * self.cfg.w_smooth * penalty_func_smooth(torch.mean(smooth_loss21_y**2, dim=1)))
+                smooth_loss21_x = smooth_loss21_x ** 2
+                smooth_loss21_y = smooth_loss21_y ** 2
+                if self.cfg.isotropic_smooth:
+                    smooth_loss21_x = torch.mean(smooth_loss21_x, dim=1)
+                    smooth_loss21_y = torch.mean(smooth_loss21_y, dim=1)
+                loss_smooth += torch.mean(smooth_weight21_x * self.cfg.w_smooth * penalty_func_smooth(smooth_loss21_x)) \
+                              + torch.mean(smooth_weight21_y * self.cfg.w_smooth * penalty_func_smooth(smooth_loss21_y))
 
         # Out of frame penalization #
         #############################
