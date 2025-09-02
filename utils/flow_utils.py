@@ -305,8 +305,8 @@ def evaluate_uncertainty(gt_flows, pred_flows, pred_entropies, sp_samples=25):
         else:
             mask = np.ones_like(epe_map)
         entropy_map = np.sum(pred_entropy[:, :, :2], axis=2)
-        splot = sp_plot(epe_map, entropy_map, mask)
-        oracle_splot = sp_plot(epe_map, epe_map, mask)     # Oracle
+        splot = sp_plot(epe_map, entropy_map, mask, n=sp_samples)
+        oracle_splot = sp_plot(epe_map, epe_map, mask, n=sp_samples)     # Oracle
 
         # Collect the sparsification plots and oracle sparsification plots
         splots += [splot]

@@ -6,7 +6,7 @@ import scipy as sp
 import time
 import torch.nn.functional as F
 
-import triag_solve_cuda
+#import triag_solve_cuda
 
 
 def matrix_vector_product_old(A, B, C, X):

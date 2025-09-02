@@ -117,8 +117,8 @@ class Sintel(ImgSeqDataset):
         img_dir = self.root / Path(self.dataset_type)
         flow_dir = self.root / 'flow'
 
-        assert img_dir.isdir()
-        assert flow_dir.isdir() or not self.with_flow
+        assert img_dir.is_dir()
+        assert flow_dir.is_dir() or not self.with_flow
 
         samples = []
         for flow_map in sorted(img_dir.glob('*/*.png')):
@@ -134,7 +134,7 @@ class Sintel(ImgSeqDataset):
             s = {'imgs': [img_dir / scene / 'frame_{:04d}.png'.format(fid + i) for i in
                           range(self.n_frames)]}
             try:
-                assert all([p.isfile() for p in s['imgs']])
+                assert all([p.is_file() for p in s['imgs']])
 
                 if self.with_flow:
                     if self.n_frames == 3:
@@ -148,7 +148,7 @@ class Sintel(ImgSeqDataset):
                             'n_frames {} with flow or mask'.format(self.n_frames))
 
                     if self.with_flow:
-                        assert s['flow'].isfile()
+                        assert s['flow'].is_file()
             except AssertionError:
                 print('Incomplete sample for: {}'.format(s['imgs'][0]))
                 continue
@@ -185,15 +185,15 @@ class Chairs2(ImgSeqDataset):
 
             # Images
             s = {'imgs': [path / '{:07d}-img_{:d}.png'.format(fid, i) for i in range(self.n_frames)]}
-            assert all([p.isfile() for p in s['imgs']])
+            assert all([p.is_file() for p in s['imgs']])
 
             if self.with_flow:
                 # for img1 img2, flow_12 will be evaluated
                 s['flow'] = flow_map
-                assert s['flow'].isfile()
+                assert s['flow'].is_file()
 
                 s['flow_bw'] = path / '{:07d}-flow_10.flo'.format(fid)
-                assert s['flow_bw'].isfile()
+                assert s['flow_bw'].is_file()
 
             samples.append(s)
 
@@ -268,13 +268,13 @@ class Chairs(ImgSeqDataset):
 
             s = {'imgs': [self.root / '{:05d}_img{:d}.ppm'.format(fid, i+1) for i in range(self.n_frames)]}
             try:
-                assert all([p.isfile() for p in s['imgs']])
+                assert all([p.is_file() for p in s['imgs']])
 
                 if self.with_flow:
                     if self.n_frames == 2:
                         # for img1 img2, flow_12 will be evaluated
                         s['flow'] = flow_map
-                        assert s['flow'].isfile()
+                        assert s['flow'].is_file()
                     else:
                         raise NotImplementedError(
                             'n_frames {} with flow or mask'.format(self.n_frames))
@@ -298,7 +298,7 @@ class KITTIFlowMV(ImgSeqDataset):
 
     def collect_samples(self):
         img_dir = 'image_2'
-        assert (self.root / img_dir).isdir()
+        assert (self.root / img_dir).is_dir()
 
         samples = []
         for filename in sorted((self.root / img_dir).glob('*.png')):
@@ -340,8 +340,8 @@ class KITTIFlow(ImgSeqDataset):
                and 'colored_0' (KITTI 2012) or 'image_2' (KITTI 2015) '''
         flow_occ_dir = 'flow_occ'
         flow_noc_dir = 'flow_noc'
-        img_dir = 'image_2' if (self.root / 'image_2').isdir() else 'colored_0'
-        assert (self.root / img_dir).isdir()
+        img_dir = 'image_2' if (self.root / 'image_2').is_dir() else 'colored_0'
+        assert (self.root / img_dir).is_dir()
 
         samples = []
         for flow_map in sorted((self.root / img_dir).glob('*_10.png')):
@@ -356,11 +356,11 @@ class KITTIFlow(ImgSeqDataset):
 
             img1 = img_dir + '/' + root_filename + '_10.png'
             img2 = img_dir + '/' + root_filename + '_11.png'
-            assert (self.root / img1).isfile() and (self.root / img2).isfile()
+            assert (self.root / img1).is_file() and (self.root / img2).is_file()
             imgs = [img1, img2]
             if self.n_frames == 3:
                 img0 = img_dir + '/' + root_filename + '_09.png'
-                assert (self.root / img0).isfile()
+                assert (self.root / img0).is_file()
                 imgs = [img0,] + imgs
 
             s.update({'imgs': imgs})
