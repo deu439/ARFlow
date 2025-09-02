@@ -260,9 +260,11 @@ class Chairs(ImgSeqDataset):
             if self.split == 'training':
                 if fid in self.valid_indices:
                     continue
-            else:
+            elif self.split == 'valid':
                 if fid not in self.valid_indices:
                     continue
+            else:
+                raise ValueError('Split {} is undefined'.format(self.split))
 
             s = {'imgs': [self.root / '{:05d}_img{:d}.ppm'.format(fid, i+1) for i in range(self.n_frames)]}
             try:
@@ -366,6 +368,39 @@ class KITTIFlow(ImgSeqDataset):
         return samples
 
 
+class Things3D(ImgSeqDataset):
+    def __init__(self, root, n_frames=2, split='training', with_flow=False, geometric_transform=None,
+                 photometric_transform=None):
+        self.with_flow = with_flow
+        self.split = split
+
+        root = Path(root)
+        super(Things3D, self).__init__(root, n_frames, geometric_transform=geometric_transform,
+                                      photometric_transform=photometric_transform)
+
+    def collect_samples(self):
+        if self.n_frames > 2:
+            raise NotImplementedError('n_frames {}'.format(self.n_frames))
+        if self.with_flow:
+            raise NotImplementedError('with_flow {}'.format(self.with_flow))
+
+        samples = []
+        if self.split == 'training':
+            path = self.root / Path('TRAIN')
+        elif self.split == 'valid':
+            path = self.root / Path('TEST')
+        else:
+            raise ValueError('Split {} is undefined'.format(self.split))
+
+        for scene in sorted(path.glob('*/*')):
+            images = [img for img in sorted(scene.glob('left/*.png'))]
+            for i in range(len(images) - 1):
+                s = {'imgs': [images[i], images[i + 1]]}
+                assert all([p.is_file() for p in s['imgs']])
+                samples.append(s)
+
+        return samples
+
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
     from easydict import EasyDict
@@ -387,18 +422,20 @@ if __name__ == "__main__":
     #                 geometric_transform=geometric_transform, photometric_transform=photometric_transforms)
     #dataset = KITTIFlow(root="/home/deu/Datasets/KITTI_2012/training", with_flow=True, geometric_transform=geometric_transform,
     #                    photometric_transform=photometric_transforms)
-    dataset = KITTIFlowMV(root="/home/deu/Datasets/KITTI_2015_multiview/training", n_frames=2, geometric_transform=None,
-                        photometric_transform=None)
-    #loader = DataLoader(dataset, batch_size=1)
+    #dataset = KITTIFlowMV(root="/home/deu/Datasets/KITTI_2015_multiview/training", n_frames=2, geometric_transform=None,
+    #                    photometric_transform=None)
+    dataset = Things3D(root="/home/deu/Datasets/FlyingThings3D/frames_cleanpass", n_frames=2, split='training',
+                       geometric_transform=None, photometric_transform=photometric_transforms)
+    loader = DataLoader(dataset, batch_size=1)
     print(len(dataset))
-    #for sample in loader:
-    #    img1 = sample['img1'][0].numpy().transpose(1, 2, 0)
-    #    img2 = sample['img2'][0].numpy().transpose(1, 2, 0)
-    #    #img1_ph = sample['img1_ph'][0].numpy().transpose(1, 2, 0)
-    #    #img2_ph = sample['img2_ph'][0].numpy().transpose(1, 2, 0)
-    #    fig, ax = plt.subplots(2,1, figsize=(10,5))
-    #    ax[0].imshow(img1)
-    #    ax[1].imshow(img2)
-    #    #ax[1,0].imshow(img1_ph)
-    #    #ax[1,1].imshow(img2_ph)
-    #    plt.show()
+    for sample in loader:
+        img1 = sample['img1_ph'][0].numpy().transpose(1, 2, 0)
+        img2 = sample['img2_ph'][0].numpy().transpose(1, 2, 0)
+        #img1_ph = sample['img1_ph'][0].numpy().transpose(1, 2, 0)
+        #img2_ph = sample['img2_ph'][0].numpy().transpose(1, 2, 0)
+        fig, ax = plt.subplots(2,1, figsize=(10,5))
+        ax[0].imshow(img1)
+        ax[1].imshow(img2)
+        #ax[1,0].imshow(img1_ph)
+        #ax[1,1].imshow(img2_ph)
+        plt.show()
