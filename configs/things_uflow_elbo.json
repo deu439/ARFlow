@@ -2,12 +2,9 @@
   "data": [
     {
       "root": "/home/deu/Datasets/FlyingThings3D/frames_cleanpass",
-      "train_n_frames": 2,
-      "type": "Things",
-      "val_n_frames": 2,
+      "name": "Things",
       "n_frames": 2,
-      "val_subsplit": "val",
-      "split": "train",
+      "type": "train",
       "geometric_aug": {
         "hflip": true,
         "crop": true,
@@ -21,10 +18,9 @@
     {
       "root_sintel": "/home/deu/Datasets/Sintel/training",
       "test_shape": [448, 1024],
-      "train_n_frames": 2,
-      "split": "valid",
+      "type": "valid",
       "subsplit": "trainval",
-      "type": "Sintel_Flow",
+      "name": "Sintel",
       "n_frames": 2
     }
   ],
@@ -99,5 +95,5 @@
     "clip": -1.0,
     "track_auc": false
   },
-  "trainer": "ChairsElbo"
+  "trainer": "uflow_elbo"
 }

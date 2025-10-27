@@ -2,8 +2,8 @@
   "data": [
     {
       "root": "/home/deu/Datasets/KITTI_2015_multiview/testing",
-      "split": "train",
-      "type": "KITTIMV",
+      "type": "train",
+      "name": "KITTIMV",
       "n_frames": 2,
       "geometric_aug": {
         "scale": true,
@@ -16,15 +16,15 @@
     },
     {
       "root": "/home/deu/Datasets/KITTI_2012/training",
-      "split": "test",
-      "type": "KITTI",
+      "type": "test",
+      "name": "KITTI",
       "n_frames": 2,
       "test_shape": [640, 640]
     },
     {
       "root": "/home/deu/Datasets/KITTI_2015/training",
-      "split": "test",
-      "type": "KITTI",
+      "type": "test",
+      "name": "KITTI",
       "n_frames": 2,
       "test_shape": [640, 640]
     }
@@ -65,5 +65,5 @@
     "workers": 4,
     "valid_masks": true
   },
-  "trainer": "Chairs"
+  "trainer": "uflow"
 }

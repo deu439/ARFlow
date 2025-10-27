@@ -2,8 +2,8 @@
   "data": [
     {
       "root": "/home/deu/Datasets/KITTI_2015_multiview/testing",
-      "split": "train",
-      "type": "KITTIMV",
+      "type": "train",
+      "name": "KITTIMV",
       "n_frames": 2,
       "geometric_aug": {
         "scale": true,
@@ -16,15 +16,15 @@
     },
     {
       "root": "/home/deu/Datasets/KITTI_2012/training",
-      "split": "test",
-      "type": "KITTI",
+      "type": "test",
+      "name": "KITTI",
       "n_frames": 2,
       "test_shape": [640, 640]
     },
     {
       "root": "/home/deu/Datasets/KITTI_2015/training",
-      "split": "test",
-      "type": "KITTI",
+      "type": "test",
+      "name": "KITTI",
       "n_frames": 2,
       "test_shape": [640, 640]
     }
@@ -67,11 +67,11 @@
   },
   "seed": 0,
   "train": {
-    "batch_size": 8,
+    "batch_size": 4,
     "bias_decay": 0,
-    "epoch_num": 2000,
+    "epoch_num": 1000,
     "epoch_size": 1000,
-    "lr": 0.0001,
+    "lr": 0.000001,
     "lr_decay_start_epoch": 1500,
     "lr_decay_factor": 0.98,
     "momentum": 0.9,
@@ -81,7 +81,7 @@
     "beta2": 0.999,
     "weight_decay": 0.0,
     "eps": 1e-8,
-    "pretrained_model": "outputs/checkpoints/241210/180738/Chairs_ckpt.pth.tar",
+    "pretrained_model": "outputs/checkpoints/250902/133538/Chairs_ckpt.pth.tar",
     "print_freq": 10,
     "record_freq": 10,
     "save_iter": 10000,
@@ -94,5 +94,5 @@
     "track_auc": false,
     "valid_masks": true
   },
-  "trainer": "ChairsElbo"
+  "trainer": "uflow_elbo"
 }

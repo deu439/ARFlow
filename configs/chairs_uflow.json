@@ -1,8 +1,8 @@
  {"data": [
    {
      "root_chairs": "/home/deu/Datasets/FlyingChairs_release/data",
-     "split": "train",
-     "type": "Chairs",
+     "type": "train",
+     "name": "Chairs",
      "n_frames": 2,
      "geometric_aug": {
        "hflip": true
@@ -13,8 +13,8 @@
      }
    },
    {"root_chairs": "/home/deu/Datasets/FlyingChairs_release/data",
-     "split": "valid",
-     "type": "Chairs",
+     "type": "valid",
+     "name": "Chairs",
      "n_frames": 2}
  ],
  "loss": {"edge_constant": 150,
@@ -46,4 +46,4 @@
            "valid_freq": 5,
            "valid_size": 0,
            "workers": 4},
- "trainer": "Chairs"}
+ "trainer": "uflow"}

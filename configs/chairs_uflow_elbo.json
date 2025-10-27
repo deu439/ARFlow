@@ -3,12 +3,9 @@
     {
       "root_chairs": "/home/deu/Datasets/FlyingChairs_release/data",
       "test_shape": [384, 512],
-      "train_n_frames": 2,
-      "type": "Chairs",
-      "val_n_frames": 2,
+      "name": "Chairs",
       "n_frames": 2,
-      "val_subsplit": "val",
-      "split": "train",
+      "type": "train",
       "geometric_aug": {
         "hflip": true,
         "crop": true,
@@ -21,15 +18,15 @@
     },
     {
       "root_chairs": "/home/deu/Datasets/FlyingChairs_release/data",
-      "split": "valid",
-      "type": "Chairs",
+      "type": "valid",
+      "name": "Chairs",
       "n_frames": 2
     }
   ],
   "loss": {
     "edge_constant": 150,
     "edge_asymp": 0.01,
-    "type": "uflow_elbo",
+    "name": "uflow_elbo",
     "w_smooth": 4.0,
     "order_smooth": 1,
     "isotropic_smooth": true,
@@ -95,5 +92,5 @@
     "clip": -1.0,
     "track_auc": false
   },
-  "trainer": "ChairsElbo"
+  "trainer": "uflow_elbo"
 }

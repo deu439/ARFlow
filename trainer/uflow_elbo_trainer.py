@@ -208,7 +208,6 @@ class TrainFramework(BaseTrainer):
                     splots += splot
                     oplots += oplot
                     error_values += auc
-                    
 
                 # Update error meters
                 error_meters.update(error_values, img1.size(0))

@@ -1,11 +1,12 @@
 {
   "data": [
     {
-      "root_sintel": "/home/deu/Datasets/Sintel/test",
-      "train_n_frames": 2,
-      "split": "train",
+      "root_sintel": "/home/deu/Datasets/MPI_Sintel",
+      "type": "train",
+      "split": "valid",
       "subsplit": "trainval",
-      "type": "Sintel_Flow",
+      "name": "Sintel",
+      "clean": true,
       "n_frames": 2,
       "geometric_aug": {
         "hflip": true,
@@ -18,12 +19,41 @@
       }
     },
     {
-      "root_sintel": "/home/deu/Datasets/Sintel/training",
-      "test_shape": [448, 1024],
-      "train_n_frames": 2,
+      "root_sintel": "/home/deu/Datasets/MPI_Sintel",
+      "type": "train",
       "split": "valid",
       "subsplit": "trainval",
-      "type": "Sintel_Flow",
+      "name": "Sintel",
+      "clean": false,
+      "n_frames": 2,
+      "geometric_aug": {
+        "hflip": true,
+        "crop": true,
+        "crop_size": [384, 832]
+      },
+      "photometric_aug": {
+        "hue": 0.5,
+        "swap_channels": true
+      }
+    },
+    {
+      "root_sintel": "/home/deu/Datasets/MPI_Sintel",
+      "test_shape": [448, 1024],
+      "type": "valid",
+      "split": "train",
+      "subsplit": "trainval",
+      "name": "Sintel",
+      "clean": true,
+      "n_frames": 2
+    },
+    {
+      "root_sintel": "/home/deu/Datasets/MPI_Sintel",
+      "test_shape": [448, 1024],
+      "type": "valid",
+      "split": "train",
+      "subsplit": "trainval",
+      "name": "Sintel",
+      "clean": false,
       "n_frames": 2
     }
   ],
@@ -70,7 +100,7 @@
     "bias_decay": 0,
     "epoch_num": 1000,
     "epoch_size": 1000,
-    "lr": 0.0001,
+    "lr": 0.00001,
     "lr_decay_start_epoch": 800,
     "lr_decay_factor": 0.98,
     "momentum": 0.9,
@@ -80,17 +110,16 @@
     "beta2": 0.999,
     "weight_decay": 0.0,
     "eps": 1e-8,
-    "pretrained_model": "outputs/checkpoints/250513/133902/Chairs_ckpt.pth.tar",
+    "pretrained_model": "outputs/checkpoints/250902/133538/Chairs_ckpt.pth.tar",
     "print_freq": 10,
     "record_freq": 10,
     "save_iter": 10000,
     "valid_freq": 10,
     "valid_size": 0,
-    "valid_batch_size": 8,
     "workers": 4,
     "sp_samples": 25,
     "clip": -1.0,
     "track_auc": false
   },
-  "trainer": "ChairsElbo"
+  "trainer": "uflow_elbo"
 }

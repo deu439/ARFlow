@@ -2,8 +2,8 @@
   "data": [
     {
       "root_chairs": "/home/deu/Datasets/FlyingChairs_release/data",
-      "split": "train",
-      "type": "Chairs",
+      "type": "train",
+      "name": "Chairs",
       "n_frames": 2,
       "geometric_aug": {
         "hflip": true
@@ -15,8 +15,8 @@
     },
     {
       "root_chairs": "/home/deu/Datasets/FlyingChairs_release/data",
-      "split": "valid",
-      "type": "Chairs",
+      "type": "valid",
+      "name": "Chairs",
       "n_frames": 2
     }
   ],
@@ -80,5 +80,5 @@
     "clip": -1.0,
     "track_auc": false
   },
-  "trainer": "ChairsElbo"
+  "trainer": "uflow_elbo"
 }

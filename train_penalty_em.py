@@ -18,8 +18,6 @@ cfg = {
         "test_shape": [384, 512],
         "train_n_frames": 2,
         "type": "Chairs",
-        "val_n_frames": 2,
-        "val_subsplit": "val"
     }],
     "data_aug": {
         "crop": False,

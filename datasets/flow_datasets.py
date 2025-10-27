@@ -10,6 +10,9 @@ from torch.utils.data import Dataset
 from utils.flow_utils import load_flow
 
 
+# TODO:
+# - make sure collect_samples() always returns relative paths
+
 def image_to_tensor(img):
     """
     Converts a PIL Image (H x W x C) to a [0,1] normalized torch.FloatTensor of shape (C x H x W).
@@ -28,6 +31,29 @@ def flow_to_tensor(flow):
 
 
 class ImgSeqDataset(Dataset, metaclass=ABCMeta):
+    """
+    Base class for image sequence datasets. Derived classes should implement the collect_samples function which returns
+    a list of dictionaries that define the paths of relevant files for each training / testing sample. Before loading
+    each sample we perform augmentation of the images if required. THE FLOW REMAINS UNTOUCHED!
+
+    The supported keys in the input dictionary are:
+    - 'imgs'        image paths
+    - 'flow'        ground truth optical flow
+    - 'flow_occ'    flow with occlusions
+    - 'flow_noc'    flow without occlusions
+    - 'mask'        mask of valid pixels (1 means valid)
+    - 'flow_bw'     backwards ground truth optical flow
+
+    The supported keys in the output dictionary are:
+    - 'img1', 'img2', etc.                      tensors containing the geometrically augmented images
+    - 'img1_ph', 'img2_ph', etc.                tensors containing the geometrically + photometrically augmented images
+    - 'img1_orgsize', 'img2_orgsize', etc.      the original image sizes (before augmentation)
+    - 'img1_rpath', 'img2_rpath', etc.          the image paths relative to the dataset root
+    - 'target'                                  dictionary of the ground-truth flows
+        o 'flow'                                ground truth optical flow (third channel contains the occlusion mask if available)
+        o 'mask'
+        o 'flow_bw'
+    """
     def __init__(self, root, n_frames, geometric_transform=None, photometric_transform=None):
         self.root = Path(root)
         self.n_frames = n_frames
@@ -66,16 +92,22 @@ class ImgSeqDataset(Dataset, metaclass=ABCMeta):
     def __getitem__(self, idx):
         images, target = self._load_sample(self.samples[idx])
 
+        # Store original image size before geometric transforms
+        data = {'img{}_orgsize'.format(i + 1): torch.tensor(img.size())[None, :] for i, img in enumerate(images)}
+
         if self.geometric_transform is not None:
             images = self.geometric_transform(images)
 
-        data = {'img{}'.format(i + 1): img for i, img in enumerate(images)}
+        data.update({'img{}'.format(i + 1): img for i, img in enumerate(images)})
 
         if self.photometric_transform is not None:
             images_ph = self.photometric_transform(images)
             data.update({'img{}_ph'.format(i + 1): img_ph for i, img_ph in enumerate(images_ph)})
 
         data['target'] = target
+
+        # Store relative paths to the image files
+        data.update({'img{}_rpath'.format(i + 1): rpath for i, rpath in enumerate(self.samples[idx]['imgs'])})
 
         return data
 
@@ -100,11 +132,15 @@ class SintelRaw(ImgSeqDataset):
 
 
 class Sintel(ImgSeqDataset):
-    def __init__(self, root, n_frames=2, type='clean',
-                 subsplit='trainval', with_flow=True, geometric_transform=None, photometric_transform=None):
+    def __init__(self, root, n_frames=2, type='final', split='train', subsplit='trainval', with_flow=True,
+                 geometric_transform=None, photometric_transform=None):
+
+        if subsplit != 'trainval' and split != 'train':
+            raise ValueError('Subsplits are defined only for the training split.')
+
         self.dataset_type = type
         self.with_flow = with_flow
-
+        self.first_level = Path('training' if split == 'train' else 'test')
         self.subsplit = subsplit
         self.training_scene = ['alley_1', 'ambush_4', 'ambush_6', 'ambush_7', 'bamboo_2',
                                'bandage_2', 'cave_2', 'market_2', 'market_5', 'shaman_2',
@@ -114,14 +150,14 @@ class Sintel(ImgSeqDataset):
                                      photometric_transform=photometric_transform)
 
     def collect_samples(self):
-        img_dir = self.root / Path(self.dataset_type)
-        flow_dir = self.root / 'flow'
+        img_dir = self.first_level / self.dataset_type
+        flow_dir = self.first_level / 'flow'
 
-        assert img_dir.is_dir()
-        assert flow_dir.is_dir() or not self.with_flow
+        assert (self.root / img_dir).is_dir()
+        assert (self.root / flow_dir).is_dir() or not self.with_flow
 
         samples = []
-        for flow_map in sorted(img_dir.glob('*/*.png')):
+        for flow_map in sorted((self.root / img_dir).glob('*/*.png')):
             info = flow_map.splitall()
             scene, filename = info[-2:]
             fid = int(filename[-8:-4])
@@ -134,7 +170,7 @@ class Sintel(ImgSeqDataset):
             s = {'imgs': [img_dir / scene / 'frame_{:04d}.png'.format(fid + i) for i in
                           range(self.n_frames)]}
             try:
-                assert all([p.is_file() for p in s['imgs']])
+                assert all([(self.root / p).is_file() for p in s['imgs']])
 
                 if self.with_flow:
                     if self.n_frames == 3:
@@ -147,23 +183,19 @@ class Sintel(ImgSeqDataset):
                         raise NotImplementedError(
                             'n_frames {} with flow or mask'.format(self.n_frames))
 
-                    if self.with_flow:
-                        assert s['flow'].is_file()
             except AssertionError:
                 print('Incomplete sample for: {}'.format(s['imgs'][0]))
                 continue
+
             samples.append(s)
 
         return samples
 
 
 class Chairs2(ImgSeqDataset):
-    def __init__(self, root, n_frames=2, split='training', with_flow=True, geometric_transform=None,
-                 photometric_transform=None):
+    def __init__(self, root, n_frames=2, split='train', with_flow=True, geometric_transform=None, photometric_transform=None):
         self.with_flow = with_flow
-        self.split = split
-
-        root = Path(root)
+        self.first_level = Path('train' if split == 'train' else 'val')
         super(Chairs2, self).__init__(root, n_frames, geometric_transform=geometric_transform,
                                       photometric_transform=photometric_transform)
 
@@ -173,27 +205,23 @@ class Chairs2(ImgSeqDataset):
             raise NotImplementedError('n_frames {}'.format(self.n_frames))
 
         samples = []
-        if self.split == 'training':
-            path = self.root / Path('train')
-        else:
-            path = self.root / Path('val')
 
-        for flow_map in sorted(path.glob('*flow_01.flo')):
+        for flow_map in sorted((self.root / self.first_level).glob('*flow_01.flo')):
             info = flow_map.splitall()
             filename = info[-1]
             fid = int(filename[0:7])
 
             # Images
-            s = {'imgs': [path / '{:07d}-img_{:d}.png'.format(fid, i) for i in range(self.n_frames)]}
-            assert all([p.is_file() for p in s['imgs']])
+            s = {'imgs': [self.first_level / '{:07d}-img_{:d}.png'.format(fid, i) for i in range(self.n_frames)]}
+            assert all([(self.root / p).is_file() for p in s['imgs']])
 
             if self.with_flow:
                 # for img1 img2, flow_12 will be evaluated
-                s['flow'] = flow_map
-                assert s['flow'].is_file()
+                s['flow'] = self.first_level / '{:07d}-flow_01.flo'.format(fid)
+                assert (self.root / s['flow']).is_file()
 
-                s['flow_bw'] = path / '{:07d}-flow_10.flo'.format(fid)
-                assert s['flow_bw'].is_file()
+                s['flow_bw'] = self.first_level / '{:07d}-flow_10.flo'.format(fid)
+                assert (self.root / s['flow_bw']).is_file()
 
             samples.append(s)
 
@@ -201,7 +229,7 @@ class Chairs2(ImgSeqDataset):
 
 
 class Chairs(ImgSeqDataset):
-    def __init__(self, root, n_frames=2, split='training', with_flow=True, geometric_transform=None,
+    def __init__(self, root, n_frames=2, split='trainval', with_flow=True, geometric_transform=None,
                  photometric_transform=None):
         self.with_flow = with_flow
         self.split = split
@@ -257,12 +285,14 @@ class Chairs(ImgSeqDataset):
             fid = int(filename[0:5])
 
             # Include only train / valid indices (depending on the chosen split)
-            if self.split == 'training':
+            if self.split == 'train':
                 if fid in self.valid_indices:
                     continue
             elif self.split == 'valid':
                 if fid not in self.valid_indices:
                     continue
+            elif self.split == 'trainval':
+                pass
             else:
                 raise ValueError('Split {} is undefined'.format(self.split))
 
@@ -329,8 +359,10 @@ class KITTIFlow(ImgSeqDataset):
     file filepath and there is no transform about target.
     """
 
-    def __init__(self, root, n_frames=2, with_flow=True, geometric_transform=None, photometric_transform=None):
+    def __init__(self, root, n_frames=2, split='train', with_flow=True, geometric_transform=None,
+                 photometric_transform=None):
         self.with_flow = with_flow
+        self.first_level = Path('training' if split == 'train' else 'testing')
 
         super(KITTIFlow, self).__init__(root, n_frames, geometric_transform=geometric_transform,
                                         photometric_transform=photometric_transform)
@@ -338,9 +370,12 @@ class KITTIFlow(ImgSeqDataset):
     def collect_samples(self):
         '''Will search in training folder for folders 'flow_noc' or 'flow_occ'
                and 'colored_0' (KITTI 2012) or 'image_2' (KITTI 2015) '''
-        flow_occ_dir = 'flow_occ'
-        flow_noc_dir = 'flow_noc'
-        img_dir = 'image_2' if (self.root / 'image_2').is_dir() else 'colored_0'
+        flow_occ_dir = self.first_level / 'flow_occ'
+        flow_noc_dir = self.first_level / 'flow_noc'
+
+        img_dir = self.first_level / 'image_2' # KITTI 2015
+        if not (self.root / img_dir).is_dir():
+            img_dir = self.first_level / 'colored_0' # KITTI 2012
         assert (self.root / img_dir).is_dir()
 
         samples = []
@@ -350,16 +385,16 @@ class KITTIFlow(ImgSeqDataset):
 
             s = {}
             if self.with_flow:
-                flow_occ_map = flow_occ_dir + '/' + flow_map
-                flow_noc_map = flow_noc_dir + '/' + flow_map
+                flow_occ_map = flow_occ_dir / flow_map
+                flow_noc_map = flow_noc_dir / flow_map
                 s.update({'flow_occ': flow_occ_map, 'flow_noc': flow_noc_map})
 
-            img1 = img_dir + '/' + root_filename + '_10.png'
-            img2 = img_dir + '/' + root_filename + '_11.png'
+            img1 = img_dir / (root_filename + '_10.png')
+            img2 = img_dir / (root_filename + '_11.png')
             assert (self.root / img1).is_file() and (self.root / img2).is_file()
             imgs = [img1, img2]
             if self.n_frames == 3:
-                img0 = img_dir + '/' + root_filename + '_09.png'
+                img0 = img_dir / (root_filename + '_09.png')
                 assert (self.root / img0).is_file()
                 imgs = [img0,] + imgs
 
@@ -369,10 +404,11 @@ class KITTIFlow(ImgSeqDataset):
 
 
 class Things3D(ImgSeqDataset):
-    def __init__(self, root, n_frames=2, split='training', with_flow=False, geometric_transform=None,
+    def __init__(self, root, n_frames=2, split='train', with_flow=False, geometric_transform=None,
                  photometric_transform=None):
         self.with_flow = with_flow
         self.split = split
+        self.first_level = Path('TRAIN' if split == 'train' else 'TEST')
 
         root = Path(root)
         super(Things3D, self).__init__(root, n_frames, geometric_transform=geometric_transform,
@@ -385,18 +421,13 @@ class Things3D(ImgSeqDataset):
             raise NotImplementedError('with_flow {}'.format(self.with_flow))
 
         samples = []
-        if self.split == 'training':
-            path = self.root / Path('TRAIN')
-        elif self.split == 'valid':
-            path = self.root / Path('TEST')
-        else:
-            raise ValueError('Split {} is undefined'.format(self.split))
+        path = self.root / self.first_level
 
         for scene in sorted(path.glob('*/*')):
             images = [img for img in sorted(scene.glob('left/*.png'))]
             for i in range(len(images) - 1):
-                s = {'imgs': [images[i], images[i + 1]]}
-                assert all([p.is_file() for p in s['imgs']])
+                s = {'imgs': [self.root.relpathto(images[i]), self.root.relpathto(images[i + 1])]}
+                assert all([(self.root / p).is_file() for p in s['imgs']])
                 samples.append(s)
 
         return samples
@@ -409,9 +440,8 @@ if __name__ == "__main__":
     from torch.utils.data import DataLoader
 
     geometric_transform = get_geometric_transforms(cfg=EasyDict({
-        'crop': True,
-        'crop_size': [100, 100],
-        'hflip': True,
+        "scale": True,
+        "scale_size": [640, 640],
     }))
     photometric_transforms = get_photometric_transforms(cfg=EasyDict({
         'hue': 0.5,
@@ -420,17 +450,21 @@ if __name__ == "__main__":
     }))
     #dataset = Chairs(root="/home/deu/Datasets/FlyingChairs_release/data", with_flow=True,
     #                 geometric_transform=geometric_transform, photometric_transform=photometric_transforms)
-    #dataset = KITTIFlow(root="/home/deu/Datasets/KITTI_2012/training", with_flow=True, geometric_transform=geometric_transform,
-    #                    photometric_transform=photometric_transforms)
+    #dataset = Chairs2(root="/home/deu/Datasets/FlyingChairs2", split='valid', photometric_transform=photometric_transforms, geometric_transform=geometric_transform)
+    #dataset = Sintel(root="/home/deu/Datasets/MPI_Sintel", split='valid', with_flow=False)
+    dataset = KITTIFlow(root="/home/deu/Datasets/KITTI_2012", split='train', with_flow=False, geometric_transform=geometric_transform,
+                        photometric_transform=photometric_transforms)
     #dataset = KITTIFlowMV(root="/home/deu/Datasets/KITTI_2015_multiview/training", n_frames=2, geometric_transform=None,
     #                    photometric_transform=None)
-    dataset = Things3D(root="/home/deu/Datasets/FlyingThings3D/frames_cleanpass", n_frames=2, split='training',
-                       geometric_transform=None, photometric_transform=photometric_transforms)
-    loader = DataLoader(dataset, batch_size=1)
+    #dataset = Things3D(root="/home/deu/Datasets/FlyingThings3D/frames_cleanpass", n_frames=2, split='training',
+    #                   geometric_transform=None, photometric_transform=photometric_transforms)
+    loader = DataLoader(dataset, batch_size=3)
     print(len(dataset))
     for sample in loader:
-        img1 = sample['img1_ph'][0].numpy().transpose(1, 2, 0)
-        img2 = sample['img2_ph'][0].numpy().transpose(1, 2, 0)
+        img1 = sample['img1'][0].numpy().transpose(1, 2, 0)
+        img2 = sample['img2'][0].numpy().transpose(1, 2, 0)
+        print(sample['img1_rpath'][0])
+        print(sample['img1_orgsize'])
         #img1_ph = sample['img1_ph'][0].numpy().transpose(1, 2, 0)
         #img2_ph = sample['img2_ph'][0].numpy().transpose(1, 2, 0)
         fig, ax = plt.subplots(2,1, figsize=(10,5))

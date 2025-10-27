@@ -16,64 +16,67 @@ def get_dataset(all_cfg):
 
     # Collect all train / valid datasets into lists
     for cfg in cfgs:
+        # Configure training augmentations
         geometric_transform = get_geometric_transforms(cfg=cfg.geometric_aug) \
             if hasattr(cfg, 'geometric_aug') else None
         photometric_transform = get_photometric_transforms(cfg=cfg.photometric_aug) \
             if hasattr(cfg, 'photometric_aug') else None
-        valid_transform = Compose([Scale(size=cfg.test_shape), ]) \
-            if hasattr(cfg, 'test_shape') else None
 
-        if cfg.type == 'Sintel_Flow':
-            if cfg.split == 'train':
-                train_set_1 = Sintel(cfg.root_sintel, n_frames=cfg.n_frames, type='clean', subsplit=cfg.subsplit,
-                                     with_flow=False, geometric_transform=geometric_transform,
-                                     photometric_transform=photometric_transform)
-                train_set_2 = Sintel(cfg.root_sintel, n_frames=cfg.n_frames, type='final', subsplit=cfg.subsplit,
-                                     with_flow=False, geometric_transform=geometric_transform,
-                                     photometric_transform=photometric_transform)
+        # Configure validation scaling
+        valid_transform = Compose([Scale(size=cfg.test_shape), ]) if hasattr(cfg, 'test_shape') else None
 
-                train_set += [train_set_1, train_set_2]
+        if cfg.name == 'Sintel':
+            if cfg.type == 'train':
+                train_set_1 = Sintel(cfg.root_sintel, n_frames=cfg.n_frames, split=cfg.split,
+                                     type='clean' if cfg.clean else 'final',
+                                     subsplit=cfg.subsplit, with_flow=False, geometric_transform=geometric_transform,
+                                     photometric_transform=photometric_transform)
+                train_set += [train_set_1]
+
             else:
-                valid_set_1 = Sintel(cfg.root_sintel, n_frames=cfg.n_frames, type='clean', subsplit=cfg.subsplit,
-                                     with_flow=True, geometric_transform=valid_transform)
-                valid_set_2 = Sintel(cfg.root_sintel, n_frames=cfg.n_frames, type='final', subsplit=cfg.subsplit,
-                                     with_flow=True, geometric_transform=valid_transform)
-                valid_set += [valid_set_1, valid_set_2]
+                valid_set_1 = Sintel(cfg.root_sintel, n_frames=cfg.n_frames, split=cfg.split,
+                                     type='clean' if cfg.clean else 'final',
+                                     subsplit=cfg.subsplit, with_flow=cfg.get('with_flow', True),
+                                     geometric_transform=valid_transform)
+                valid_set += [valid_set_1]
 
-        elif cfg.type == 'Chairs2':
-            if cfg.split == 'train':
-                train_set_1 = Chairs2(cfg.root_chairs, n_frames=cfg.n_frames, split='training', with_flow=False,
+        elif cfg.name == 'Chairs2':
+            if cfg.type == 'train':
+                train_set_1 = Chairs2(cfg.root_chairs, n_frames=cfg.n_frames, split=cfg.split, with_flow=False,
                                       geometric_transform=geometric_transform,
                                       photometric_transform=photometric_transform)
 
                 train_set += [train_set_1]
             else:
-                valid_set_1 = Chairs2(cfg.root_chairs, n_frames=cfg.n_frames, split='valid', with_flow=True)
+                valid_set_1 = Chairs2(cfg.root_chairs, n_frames=cfg.n_frames, split=cfg.split,
+                                      with_flow=cfg.get('with_flow', True), geometric_transform=valid_transform)
                 valid_set += [valid_set_1]
 
-        elif cfg.type == 'Chairs':
-            if cfg.split == 'train':
-                train_set_1 = Chairs(cfg.root_chairs, n_frames=cfg.n_frames, split='training', with_flow=False,
+        elif cfg.name == 'Chairs':
+            if cfg.type == 'train':
+                train_set_1 = Chairs(cfg.root_chairs, n_frames=cfg.n_frames, split=cfg.split, with_flow=False,
                                      geometric_transform=geometric_transform,
                                      photometric_transform=photometric_transform)
                 train_set += [train_set_1]
             else:
-                valid_set_1 = Chairs(cfg.root_chairs, n_frames=cfg.n_frames, split='valid', with_flow=True)
+                valid_set_1 = Chairs(cfg.root_chairs, n_frames=cfg.n_frames, split=cfg.split,
+                                     with_flow=cfg.get('with_flow', True), geometric_transform=valid_transform)
                 valid_set += [valid_set_1]
 
-        elif cfg.type == 'KITTI':
-            if cfg.split == 'train':
-                train_set_1 = KITTIFlow(cfg.root, n_frames=cfg.n_frames, with_flow=False,
+        elif cfg.name == 'KITTI':
+            if cfg.type == 'train':
+                train_set_1 = KITTIFlow(cfg.root, n_frames=cfg.n_frames, split=cfg.split, with_flow=False,
                                            geometric_transform=geometric_transform,
                                            photometric_transform=photometric_transform)
                 train_set += [train_set_1]
 
             else:
-                valid_set_1 = KITTIFlow(cfg.root, n_frames=cfg.n_frames, geometric_transform=valid_transform)
+                valid_set_1 = KITTIFlow(cfg.root, n_frames=cfg.n_frames, split=cfg.split,
+                                        geometric_transform=valid_transform, with_flow=cfg.get('with_flow', True))
                 valid_set += [valid_set_1]
 
-        elif cfg.type == 'KITTIMV':
-            if cfg.split == 'train':
+        elif cfg.name == 'KITTIMV':
+            if cfg.type == 'train':
                 train_set_1 = KITTIFlowMV(cfg.root, n_frames=cfg.n_frames,
                                         geometric_transform=geometric_transform,
                                         photometric_transform=photometric_transform)
@@ -83,13 +86,16 @@ def get_dataset(all_cfg):
                 valid_set_1 = KITTIFlowMV(cfg.root, n_frames=cfg.n_frames, geometric_transform=valid_transform)
                 valid_set += [valid_set_1]
 
-        elif cfg.type == 'Things':
-            if cfg.split == 'train':
-                train_set_1 = Things3D(cfg.root, n_frames=cfg.n_frames, geometric_transform=geometric_transform,
+        elif cfg.name == 'Things':
+            if cfg.type == 'train':
+                train_set_1 = Things3D(cfg.root, n_frames=cfg.n_frames, split=cfg.split,
+                                       geometric_transform=geometric_transform,
                                        photometric_transform=photometric_transform)
                 train_set += [train_set_1]
+            else:
+                raise NotImplementedError(cfg.type)
         else:
-            raise NotImplementedError(cfg.type)
+            raise NotImplementedError(cfg.name)
 
     # Concatenate only train sets
-    return ConcatDataset(train_set), valid_set
+    return ConcatDataset(train_set) if len(train_set) > 0 else None, valid_set

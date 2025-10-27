@@ -2,10 +2,7 @@
           "root_chairs": "/home/deu/Datasets/FlyingChairs2/",
           "run_at": false,
           "test_shape": [384, 512],
-          "train_n_frames": 2,
-          "type": "Chairs",
-          "val_n_frames": 2,
-          "val_subsplit": "val"}],
+          "name": "Chairs"}],
   "data_aug": {"crop": true,
                "hflip": true,
                "para_crop": [256, 448],
@@ -60,4 +57,4 @@
            "sp_samples": 25,
            "clip": -1.0,
            "track_auc": true},
- "trainer": "ChairsElbo"}
+ "trainer": "uflow_elbo"}
